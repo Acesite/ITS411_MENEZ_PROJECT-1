@@ -35,5 +35,7 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+#firebase Keys
+google-services.json 
 
 app-example
