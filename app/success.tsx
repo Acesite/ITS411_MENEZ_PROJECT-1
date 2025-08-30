@@ -5,7 +5,7 @@ import { StyleSheet, Text, View } from "react-native";
 export default function SuccessScreen() {
   useEffect(() => {
     const timer = setTimeout(() => {
-      router.replace("/login"); // ✅ auto-redirect back to login after 2s
+      router.replace("/"); 
     }, 10000);
 
     return () => clearTimeout(timer);

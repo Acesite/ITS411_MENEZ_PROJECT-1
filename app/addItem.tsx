@@ -1,9 +1,17 @@
-import { useRouter } from "expo-router"; // <-- import router
-import { signOut } from "firebase/auth";
-import { addDoc, collection, deleteDoc, doc, getDocs, updateDoc } from "firebase/firestore";
+import auth from "@react-native-firebase/auth";
+import firestore from "@react-native-firebase/firestore";
+import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { Alert, Button, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { auth, db } from "../firebase/firebaseConfig";
+import {
+  Alert,
+  Button,
+  FlatList,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
 interface Item {
   id: string;
@@ -13,7 +21,7 @@ interface Item {
 }
 
 export default function AddItem() {
-  const router = useRouter(); // <-- initialize router
+  const router = useRouter();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -22,27 +30,30 @@ export default function AddItem() {
   const [list, setList] = useState<Item[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const itemsCollection = collection(db, "items");
+  const itemsCollection = firestore().collection("items");
 
   const fetchItems = async () => {
-    const snapshot = await getDocs(itemsCollection);
-    const items: Item[] = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    } as Item));
-    setList(items);
+    try {
+      const snapshot = await itemsCollection.get();
+      const items: Item[] = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...(doc.data() as Omit<Item, "id">),
+      }));
+      setList(items);
+    } catch (error) {
+      Alert.alert("Error", "Failed to fetch items.");
+    }
   };
 
   useEffect(() => {
     fetchItems();
   }, []);
 
-  // <-- Updated logout function with navigation
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await auth().signOut();
       Alert.alert("Success", "Logged out successfully!");
-      router.push("/login"); // <-- redirect to login page
+      router.push("/");
     } catch (error) {
       Alert.alert("Error", "Failed to log out.");
     }
@@ -54,18 +65,22 @@ export default function AddItem() {
       return;
     }
 
-    if (editingId) {
-      await updateDoc(doc(db, "items", editingId), { name, description, tags });
-      setEditingId(null);
-    } else {
-      await addDoc(itemsCollection, { name, description, tags });
-    }
+    try {
+      if (editingId) {
+        await itemsCollection.doc(editingId).update({ name, description, tags });
+        setEditingId(null);
+      } else {
+        await itemsCollection.add({ name, description, tags });
+      }
 
-    setName("");
-    setDescription("");
-    setTags([]);
-    setTagInput("");
-    fetchItems();
+      setName("");
+      setDescription("");
+      setTags([]);
+      setTagInput("");
+      fetchItems();
+    } catch (error) {
+      Alert.alert("Error", "Failed to save item.");
+    }
   };
 
   const handleEdit = (item: Item) => {
@@ -76,8 +91,12 @@ export default function AddItem() {
   };
 
   const handleDelete = async (id: string) => {
-    await deleteDoc(doc(db, "items", id));
-    fetchItems();
+    try {
+      await itemsCollection.doc(id).delete();
+      fetchItems();
+    } catch (error) {
+      Alert.alert("Error", "Failed to delete item.");
+    }
   };
 
   const handleAddTag = () => {
@@ -89,66 +108,79 @@ export default function AddItem() {
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
-    setTags(tags.filter(tag => tag !== tagToRemove));
+    setTags(tags.filter((tag) => tag !== tagToRemove));
   };
 
   return (
-  <View style={styles.container}>
-    {/* Logout button floating at top-right */}
-    <View style={styles.logoutButtonWrapper}>
-      <Button title="Logout" onPress={handleLogout} color="red" />
-    </View>
-
-    <Text style={styles.title}>Add Product</Text>
-
-    <TextInput placeholder="Name" value={name} onChangeText={setName} style={styles.input} />
-    <TextInput placeholder="Description" value={description} onChangeText={setDescription} style={styles.input} />
-
-    {/* Tag input & chips */}
-    <View style={styles.tagsWrapper}>
-      <View style={styles.tagsContainer}>
-        {tags.map((tag, index) => (
-          <View key={index} style={styles.tagChip}>
-            <Text style={styles.tagText}>{tag}</Text>
-            <TouchableOpacity onPress={() => handleRemoveTag(tag)}>
-              <Text style={styles.removeTag}>×</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
+    <View style={styles.container}>
+      {/* Logout button */}
+      <View style={styles.logoutButtonWrapper}>
+        <Button title="Logout" onPress={handleLogout} color="red" />
       </View>
+
+      <Text style={styles.title}>Add Product</Text>
+
       <TextInput
-        placeholder="Add a tag"
-        value={tagInput}
-        onChangeText={setTagInput}
-        onSubmitEditing={handleAddTag}
+        placeholder="Name"
+        value={name}
+        onChangeText={setName}
         style={styles.input}
       />
-      <Button title="Add Tag" onPress={handleAddTag} />
-    </View>
+      <TextInput
+        placeholder="Description"
+        value={description}
+        onChangeText={setDescription}
+        style={styles.input}
+      />
 
-    <Button title={editingId ? "Update Item" : "Add Item"} onPress={handleAddItem} />
-
-    <FlatList
-      data={list}
-      keyExtractor={item => item.id}
-      renderItem={({ item }) => (
-        <View style={styles.itemContainer}>
-          <Text style={styles.itemText}>{item.name}</Text>
-          <Text>{item.description}</Text>
-          <Text>Tags: {item.tags.join(", ")}</Text>
-          <View style={styles.buttonRow}>
-            <TouchableOpacity onPress={() => handleEdit(item)}>
-              <Text style={styles.editButton}>Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => handleDelete(item.id)}>
-              <Text style={styles.deleteButton}>Delete</Text>
-            </TouchableOpacity>
-          </View>
+      {/* Tags */}
+      <View style={styles.tagsWrapper}>
+        <View style={styles.tagsContainer}>
+          {tags.map((tag, index) => (
+            <View key={index} style={styles.tagChip}>
+              <Text style={styles.tagText}>{tag}</Text>
+              <TouchableOpacity onPress={() => handleRemoveTag(tag)}>
+                <Text style={styles.removeTag}>×</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
         </View>
-      )}
-    />
-  </View>
-);
+        <TextInput
+          placeholder="Add a tag"
+          value={tagInput}
+          onChangeText={setTagInput}
+          onSubmitEditing={handleAddTag}
+          style={styles.input}
+        />
+        <Button title="Add Tag" onPress={handleAddTag} />
+      </View>
+
+      <Button
+        title={editingId ? "Update Item" : "Add Item"}
+        onPress={handleAddItem}
+      />
+
+      <FlatList
+        data={list}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <View style={styles.itemContainer}>
+            <Text style={styles.itemText}>{item.name}</Text>
+            <Text>{item.description}</Text>
+            <Text>Tags: {item.tags.join(", ")}</Text>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={() => handleEdit(item)}>
+                <Text style={styles.editButton}>Edit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => handleDelete(item.id)}>
+                <Text style={styles.deleteButton}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      />
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -157,19 +189,47 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 20,
     right: 20,
-    zIndex: 1, // ensures it's on top
+    zIndex: 1,
   },
-  title: { fontSize: 22, fontWeight: "bold", marginBottom: 20, textAlign: "center" },
-  input: { borderWidth: 1, borderColor: "#ccc", padding: 10, marginBottom: 10, borderRadius: 5 },
-  itemContainer: { padding: 10, borderBottomWidth: 1, borderColor: "#ccc", marginTop: 10 },
+  title: {
+    fontSize: 22,
+    fontWeight: "bold",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    padding: 10,
+    marginBottom: 10,
+    borderRadius: 5,
+  },
+  itemContainer: {
+    padding: 10,
+    borderBottomWidth: 1,
+    borderColor: "#ccc",
+    marginTop: 10,
+  },
   itemText: { fontWeight: "bold", fontSize: 18 },
   buttonRow: { flexDirection: "row", marginTop: 5 },
   editButton: { color: "blue", marginRight: 10 },
   deleteButton: { color: "red" },
 
   tagsWrapper: { marginBottom: 10 },
-  tagsContainer: { flexDirection: "row", flexWrap: "wrap", marginBottom: 5 },
-  tagChip: { flexDirection: "row", backgroundColor: "#eee", borderRadius: 15, paddingHorizontal: 10, paddingVertical: 5, margin: 3, alignItems: "center" },
+  tagsContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginBottom: 5,
+  },
+  tagChip: {
+    flexDirection: "row",
+    backgroundColor: "#eee",
+    borderRadius: 15,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    margin: 3,
+    alignItems: "center",
+  },
   tagText: { marginRight: 5 },
   removeTag: { color: "red", fontWeight: "bold" },
 });
