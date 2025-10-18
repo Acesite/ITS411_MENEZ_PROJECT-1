@@ -1,18 +1,13 @@
-// auth.ts
-import auth from '@react-native-firebase/auth';
+// functions/auth.ts
+import auth from "@react-native-firebase/auth";
 
-export const signUp = (email: string, password: string) => {
-  return auth().createUserWithEmailAndPassword(email, password);
-};
+export const signUp = (email: string, password: string) =>
+  auth().createUserWithEmailAndPassword(email.trim().toLowerCase(), password);
 
-export async function signIn(email: string, password: string) {
-  return auth().signInWithEmailAndPassword(email, password);
-}
+export const signIn = (email: string, password: string) =>
+  auth().signInWithEmailAndPassword(email.trim().toLowerCase(), password);
 
-export const login = (email: string, password: string) => {
-  return auth().signInWithEmailAndPassword(email, password);
-};
+export const login = (email: string, password: string) =>
+  auth().signInWithEmailAndPassword(email.trim().toLowerCase(), password);
 
-export const logout = () => {
-  return auth().signOut();
-};
+export const logout = () => auth().signOut();
