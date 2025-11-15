@@ -1,5 +1,9 @@
 import { useColorScheme } from "@/hooks/useColorScheme";
-import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
+import {
+  DarkTheme,
+  DefaultTheme,
+  ThemeProvider,
+} from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -25,6 +29,16 @@ export default function RootLayout() {
           <Stack.Screen name="signup" />
           <Stack.Screen name="addItem" />
           <Stack.Screen name="success" />
+
+          {/* ✅ ADD THIS: register the map screen */}
+          <Stack.Screen
+            name="map"
+            options={{
+              title: "Map",
+              // or hide header if you want full-screen map:
+              // headerShown: false,
+            }}
+          />
         </Stack>
         <StatusBar style="auto" />
       </UserProvider>
