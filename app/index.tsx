@@ -2,14 +2,7 @@
 import auth from "@react-native-firebase/auth";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
-import {
-  Button,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { Button, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 // 👉 NEW: use the provider
 import { useUser } from "../provider/userProvider";
@@ -29,9 +22,7 @@ export default function Login() {
       // Save user info to the provider (simple example derives a name from email)
       setUser({ name: cleanEmail.split("@")[0], email: cleanEmail });
 
-      // 🔁 BEFORE: router.push("/addItem");
-      // ✅ AFTER: go to the map screen
-      router.push("/map");
+      router.push("/addItem");
     } catch (e: any) {
       setError(e?.message ?? "Login failed");
     }
@@ -67,6 +58,11 @@ export default function Login() {
           <Text style={styles.signupText}> Sign Up</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Optional: quick way to clear provider while testing */}
+      {/* <View style={{ marginTop: 12 }}>
+        <Button title="Clear User (Provider)" onPress={clearUser} />
+      </View> */}
     </View>
   );
 }
