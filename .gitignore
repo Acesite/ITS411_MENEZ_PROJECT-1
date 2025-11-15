@@ -38,4 +38,7 @@ yarn-error.*
 #firebase Keys
 google-services.json 
 
+/android
+/ios
+
 app-example
