@@ -37,7 +37,7 @@ yarn-error.*
 *.tsbuildinfo
 
 #firebase Keys
-google-services.json 
+#google-services.json 
 
 /android
 /ios
