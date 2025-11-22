@@ -2,13 +2,20 @@
 import auth from "@react-native-firebase/auth";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
-import { Button, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import {
+  Button,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
-// 👉 NEW: use the provider
+// 👉 use the provider
 import { useUser } from "../provider/userProvider";
 
 export default function Login() {
-  const { setUser, clearUser } = useUser();
+  const { setUser } = useUser();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -17,12 +24,14 @@ export default function Login() {
   const handleLogin = async () => {
     try {
       const cleanEmail = email.trim().toLowerCase();
+
       await auth().signInWithEmailAndPassword(cleanEmail, password);
 
       // Save user info to the provider (simple example derives a name from email)
       setUser({ name: cleanEmail.split("@")[0], email: cleanEmail });
 
-      router.push("/addItem");
+      // ✅ go to Mapbox screen after login
+      router.replace("/mapbox");
     } catch (e: any) {
       setError(e?.message ?? "Login failed");
     }
@@ -40,6 +49,7 @@ export default function Login() {
         onChangeText={setEmail}
         style={styles.input}
       />
+
       <TextInput
         placeholder="Password"
         secureTextEntry
@@ -59,18 +69,42 @@ export default function Login() {
         </TouchableOpacity>
       </View>
 
-      {/* Optional: quick way to clear provider while testing */}
-      {/* <View style={{ marginTop: 12 }}>
+      {/* Optional: quick way to clear provider while testing
+      <View style={{ marginTop: 12 }}>
         <Button title="Clear User (Provider)" onPress={clearUser} />
-      </View> */}
+      </View>
+      */}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: "center", padding: 20, backgroundColor: "#fff" },
-  title: { fontSize: 24, fontWeight: "bold", marginBottom: 20, textAlign: "center" },
-  input: { borderWidth: 1, borderColor: "#ccc", padding: 10, marginBottom: 10, borderRadius: 5 },
-  footer: { flexDirection: "row", justifyContent: "center", marginTop: 20 },
-  signupText: { color: "blue", marginLeft: 5 },
+  container: {
+    flex: 1,
+    justifyContent: "center",
+    padding: 20,
+    backgroundColor: "#fff",
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "bold",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    padding: 10,
+    marginBottom: 10,
+    borderRadius: 5,
+  },
+  footer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    marginTop: 20,
+  },
+  signupText: {
+    color: "blue",
+    marginLeft: 5,
+  },
 });

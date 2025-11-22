@@ -30,6 +30,13 @@
       "@react-native-firebase/auth",
       "@react-native-firebase/crashlytics",
       "expo-router",
+      
+      [
+        "@rnmapbox/maps",
+    {
+      "RNMapboxMapsVersion": "11.16.0"
+    }
+      ],
       [
         "expo-splash-screen",
         {

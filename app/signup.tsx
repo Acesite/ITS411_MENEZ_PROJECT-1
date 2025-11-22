@@ -1,47 +1,175 @@
+// app/signup.tsx
 import auth from "@react-native-firebase/auth";
+import firestore from "@react-native-firebase/firestore";
+import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
-import { Alert, Button, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
 export default function UserRegistration() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
   const router = useRouter();
 
+  // ----- pick profile image -----
+  const handlePickImage = async () => {
+    const { status } =
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission required",
+        "We need access to your photos to set a profile picture."
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.5, // compress a bit
+      base64: true, // we will store base64 in Firestore
+    });
+
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      setImageUri(asset.uri);
+      setImageBase64(asset.base64 ?? null);
+    }
+  };
+
   const handleRegister = async () => {
-  const cleanEmail = email.trim().toLowerCase();
-  if (!username || !cleanEmail || !password || !confirmPassword) {
-    Alert.alert("Error", "All fields are required.");
-    return;
-  }
-  if (password !== confirmPassword) {
-    Alert.alert("Error", "Passwords do not match.");
-    return;
-  }
+    const cleanEmail = email.trim().toLowerCase();
 
-  try {
-    const userCredential = await auth().createUserWithEmailAndPassword(cleanEmail, password);
-    await userCredential.user.updateProfile({ displayName: username });
-    Alert.alert("Success", "Registration complete!");
-    router.push("/");
-  } catch (error: any) {
-    Alert.alert("Registration Failed", error.message);
-  }
-};
+    if (!username || !cleanEmail || !password || !confirmPassword) {
+      Alert.alert("Error", "All fields are required.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert("Error", "Passwords do not match.");
+      return;
+    }
 
+    setLoading(true);
+
+    try {
+      // 1) Create auth user
+      const userCredential = await auth().createUserWithEmailAndPassword(
+        cleanEmail,
+        password
+      );
+      const createdUser = userCredential.user;
+      console.log("Created user:", createdUser.uid, createdUser.email);
+
+      // 2) Update Firebase Auth profile (displayName only)
+      const fbUser = auth().currentUser;
+      if (fbUser) {
+        await fbUser.updateProfile({
+          displayName: username,
+        });
+
+        await fbUser.reload();
+        console.log(
+          "After reload currentUser:",
+          fbUser.displayName,
+          fbUser.photoURL
+        );
+      } else {
+        console.log("No currentUser right after signup 🤔");
+      }
+
+      // 3) Save profile info in Firestore (including avatar base64)
+      await firestore().collection("userProfiles").doc(createdUser.uid).set({
+        displayName: username,
+        avatarBase64: imageBase64 ?? null,
+        createdAt: firestore.FieldValue.serverTimestamp(),
+      });
+
+      Alert.alert("Success", "Registration complete!");
+      router.replace("/mapbox");
+    } catch (error: any) {
+      console.log("Registration error:", error);
+      Alert.alert(
+        "Registration Failed",
+        error.message || "Something went wrong."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Register</Text>
 
-      <TextInput style={styles.input} placeholder="Username" value={username} onChangeText={setUsername} />
-      <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-      <TextInput style={styles.input} placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
-      <TextInput style={styles.input} placeholder="Confirm Password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry />
+      {/* Profile picture preview */}
+      <TouchableOpacity onPress={handlePickImage} style={styles.avatarWrapper}>
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={styles.avatar} />
+        ) : (
+          <View style={styles.avatarPlaceholder}>
+            <Text style={styles.avatarInitial}>+</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+      <Text style={styles.avatarText}>Tap to choose profile picture</Text>
 
-      <Button title="Register" onPress={handleRegister} />
+      <TextInput
+        style={styles.input}
+        placeholder="Username"
+        value={username}
+        onChangeText={setUsername}
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Email"
+        value={email}
+        onChangeText={setEmail}
+        keyboardType="email-address"
+        autoCapitalize="none"
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Password"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Confirm Password"
+        value={confirmPassword}
+        onChangeText={setConfirmPassword}
+        secureTextEntry
+      />
+
+      <TouchableOpacity
+        style={[styles.button, loading && { opacity: 0.7 }]}
+        onPress={handleRegister}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>Register</Text>
+        )}
+      </TouchableOpacity>
 
       <View style={styles.footer}>
         <Text>Already have an account?</Text>
@@ -53,10 +181,74 @@ export default function UserRegistration() {
   );
 }
 
+const AVATAR_SIZE = 96;
+
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: "#fff" },
-  title: { fontSize: 24, fontWeight: "bold", marginBottom: 20, textAlign: "center" },
-  input: { borderWidth: 1, borderColor: "#ccc", padding: 10, marginBottom: 10, borderRadius: 5 },
-  footer: { flexDirection: "row", justifyContent: "center", marginTop: 20 },
+  title: {
+    fontSize: 24,
+    fontWeight: "bold",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  avatarWrapper: {
+    alignSelf: "center",
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    borderRadius: AVATAR_SIZE / 2,
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: "#e5e7eb",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  avatar: {
+    width: "100%",
+    height: "100%",
+  },
+  avatarPlaceholder: {
+    width: "100%",
+    height: "100%",
+    borderRadius: AVATAR_SIZE / 2,
+    backgroundColor: "#e5e7eb",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarInitial: {
+    fontSize: 40,
+    color: "#6b7280",
+    fontWeight: "600",
+  },
+  avatarText: {
+    textAlign: "center",
+    color: "#6b7280",
+    marginBottom: 16,
+    fontSize: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    padding: 10,
+    marginBottom: 10,
+    borderRadius: 5,
+  },
+  button: {
+    backgroundColor: "#2563eb",
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: "center",
+    marginTop: 4,
+  },
+  buttonText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 16,
+  },
+  footer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    marginTop: 20,
+  },
   loginText: { color: "blue", marginLeft: 5 },
 });

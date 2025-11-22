@@ -1,3 +1,4 @@
+// app/_layout.tsx
 import { useColorScheme } from "@/hooks/useColorScheme";
 import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
@@ -5,7 +6,6 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import "react-native-reanimated";
 
-// 👉 NEW: import the provider
 import { UserProvider } from "../provider/userProvider";
 
 export default function RootLayout() {
@@ -18,13 +18,28 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      {/* Wrap the whole app tree with your Provider */}
       <UserProvider>
         <Stack>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="signup" />
-          <Stack.Screen name="addItem" />
-          <Stack.Screen name="success" />
+          {/* Login */}
+          <Stack.Screen
+            name="index"
+            options={{ headerShown: false }}
+          />
+          {/* Signup */}
+          <Stack.Screen
+            name="signup"
+            options={{ headerShown: false }}
+          />
+          {/* Map / GeoThoughts */}
+          <Stack.Screen
+            name="mapbox"
+            options={{ headerShown: false }}
+          />
+          {/* Any other screens you still use */}
+          <Stack.Screen
+            name="success"
+            options={{ headerShown: false }}
+          />
         </Stack>
         <StatusBar style="auto" />
       </UserProvider>
