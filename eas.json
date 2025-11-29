@@ -11,6 +11,7 @@
     "preview": {
       "distribution": "internal",
       "android":{
+         "buildType": "apk",
         "env":{
           "ANDROID_GOOGLE_SERVICES": "./android/app/google-services.json"
         }
