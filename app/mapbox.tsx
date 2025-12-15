@@ -4,7 +4,7 @@ import firestore from "@react-native-firebase/firestore";
 import Mapbox from "@rnmapbox/maps";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Image,
@@ -16,10 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import {
-  SafeAreaView,
-  useSafeAreaInsets,
-} from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 Mapbox.setAccessToken(
   "pk.eyJ1Ijoid29tcHdvbXAtNjkiLCJhIjoiY204emxrOHkwMGJsZjJrcjZtZmN4YXdtNSJ9.LIMPvoBNtGuj4O36r3F72w"
@@ -55,6 +52,35 @@ const formatTimeAgo = (date: Date | null): string => {
   return diffYear === 1 ? "1 year ago" : `${diffYear} years ago`;
 };
 
+// --- Robust image helpers (FIX for PNG/JPEG base64 + data URI + URL) ---
+function guessMimeFromBase64(b64: string) {
+  // JPEG base64 often starts with "/9j/"
+  if (b64.startsWith("/9j/")) return "image/jpeg";
+  // PNG base64 often starts with "iVBOR"
+  if (b64.startsWith("iVBOR")) return "image/png";
+  return "image/jpeg";
+}
+
+function toImageSource(raw?: string | null) {
+  if (!raw) return null;
+
+  // Already a full data URI
+  if (raw.startsWith("data:image/")) return { uri: raw };
+
+  // Looks like a URL
+  if (
+    raw.startsWith("http://") ||
+    raw.startsWith("https://") ||
+    raw.startsWith("file:")
+  ) {
+    return { uri: raw };
+  }
+
+  // Assume plain base64
+  const mime = guessMimeFromBase64(raw);
+  return { uri: `data:${mime};base64,${raw}` };
+}
+
 // ---------- Types ----------
 type Thought = {
   id: string;
@@ -77,7 +103,7 @@ type Comment = {
 
 type UserProfile = {
   displayName?: string | null;
-  avatarBase64?: string | null;
+  avatarBase64?: string | null; // may be raw base64 OR "data:image/...;base64,..."
 };
 
 type ThoughtWithRenderCoord = Thought & {
@@ -88,10 +114,9 @@ const DEFAULT_CENTER: [number, number] = [123.8854, 10.3157]; // fallback center
 
 // Spread overlapping thoughts a tiny bit so markers aren't exactly stacked
 function jitterThoughtsForRender(thoughts: Thought[]): ThoughtWithRenderCoord[] {
-  // group thoughts by rounded coord key
   const groups: Record<string, Thought[]> = {};
   thoughts.forEach((t) => {
-    const key = `${t.coord[0].toFixed(5)}|${t.coord[1].toFixed(5)}`; // ~1m precision
+    const key = `${t.coord[0].toFixed(5)}|${t.coord[1].toFixed(5)}`;
     if (!groups[key]) groups[key] = [];
     groups[key].push(t);
   });
@@ -106,28 +131,19 @@ function jitterThoughtsForRender(thoughts: Thought[]): ThoughtWithRenderCoord[] 
     }
 
     const [baseLng, baseLat] = group[0].coord;
-    const radiusMeters = 2; // 2m ring around center
+    const radiusMeters = 2;
 
     const metersPerDegLat = 111_320;
-    const metersPerDegLng =
-      111_320 * Math.cos((baseLat * Math.PI) / 180);
+    const metersPerDegLng = 111_320 * Math.cos((baseLat * Math.PI) / 180);
 
     group.forEach((t, index) => {
       const angle = (2 * Math.PI * index) / n;
-      const deltaLat =
-        (Math.sin(angle) * radiusMeters) / metersPerDegLat;
-      const deltaLng =
-        (Math.cos(angle) * radiusMeters) / metersPerDegLng;
+      const deltaLat = (Math.sin(angle) * radiusMeters) / metersPerDegLat;
+      const deltaLng = (Math.cos(angle) * radiusMeters) / metersPerDegLng;
 
-      const jittered: [number, number] = [
-        baseLng + deltaLng,
-        baseLat + deltaLat,
-      ];
+      const jittered: [number, number] = [baseLng + deltaLng, baseLat + deltaLat];
 
-      result.push({
-        ...t,
-        renderCoord: jittered,
-      });
+      result.push({ ...t, renderCoord: jittered });
     });
   });
 
@@ -138,9 +154,7 @@ export default function MapboxScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const [userLocation, setUserLocation] = useState<[number, number] | null>(
-    null
-  );
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [thoughtText, setThoughtText] = useState("");
@@ -157,56 +171,54 @@ export default function MapboxScreen() {
   const commentsUnsubRef = useRef<null | (() => void)>(null);
 
   // camera state
-  const [cameraCenter, setCameraCenter] = useState<[number, number] | null>(
-    null
-  );
+  const [cameraCenter, setCameraCenter] = useState<[number, number] | null>(null);
   const [cameraZoom, setCameraZoom] = useState<number>(5);
 
   // ---- AUTH USER STATE (for displayName + avatar) ----
   const [currentUser, setCurrentUser] = useState(auth().currentUser);
   const [avatarBase64, setAvatarBase64] = useState<string | null>(null);
 
-  // All user profiles (for markers)
-  const [userProfiles, setUserProfiles] = useState<
-    Record<string, UserProfile>
-  >({});
+  // Keep a live listener for the current user's profile (so avatar updates immediately)
+  const myProfileUnsubRef = useRef<null | (() => void)>(null);
 
-  // Subscribe to auth state changes + load current user's profile
+  // All user profiles (for markers)
+  const [userProfiles, setUserProfiles] = useState<Record<string, UserProfile>>({});
+
+  // Subscribe to auth state changes + subscribe to current user's profile doc
   useEffect(() => {
     const unsubscribe = auth().onAuthStateChanged(async (user) => {
+      // cleanup old listener
+      if (myProfileUnsubRef.current) {
+        myProfileUnsubRef.current();
+        myProfileUnsubRef.current = null;
+      }
+
       if (user) {
         try {
           await user.reload();
           const fresh = auth().currentUser;
 
-          console.log(
-            "Auth state changed (after reload):",
-            fresh?.uid,
-            fresh?.email,
-            "photoURL:",
-            fresh?.photoURL
-          );
-
           const effectiveUser = fresh ?? user;
           setCurrentUser(effectiveUser);
 
           if (effectiveUser?.uid) {
-            firestore()
+            myProfileUnsubRef.current = firestore()
               .collection("userProfiles")
               .doc(effectiveUser.uid)
-              .get()
-              .then((docSnap) => {
-                if (docSnap.exists()) {
-                  const data = docSnap.data() as any;
-                  setAvatarBase64(data?.avatarBase64 ?? null);
-                } else {
+              .onSnapshot(
+                (docSnap) => {
+                  if (docSnap.exists()) {
+                    const data = docSnap.data() as any;
+                    setAvatarBase64(data?.avatarBase64 ?? null);
+                  } else {
+                    setAvatarBase64(null);
+                  }
+                },
+                (err) => {
+                  console.log("Error listening to my profile:", err);
                   setAvatarBase64(null);
                 }
-              })
-              .catch((err) => {
-                console.log("Error loading user profile:", err);
-                setAvatarBase64(null);
-              });
+              );
           } else {
             setAvatarBase64(null);
           }
@@ -216,13 +228,18 @@ export default function MapboxScreen() {
           setAvatarBase64(null);
         }
       } else {
-        console.log("Auth state changed: signed out");
         setCurrentUser(null);
         setAvatarBase64(null);
       }
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      if (myProfileUnsubRef.current) {
+        myProfileUnsubRef.current();
+        myProfileUnsubRef.current = null;
+      }
+    };
   }, []);
 
   // Subscribe to all user profiles (used for markers)
@@ -260,12 +277,9 @@ export default function MapboxScreen() {
     currentUser?.displayName ||
     (currentUser?.email ? currentUser.email.split("@")[0] : "User");
 
+  // FIXED: robust avatar source (base64 png/jpg + data uri + url)
   const avatarSource =
-    avatarBase64
-      ? { uri: `data:image/jpeg;base64,${avatarBase64}` }
-      : currentUser?.photoURL
-      ? { uri: currentUser.photoURL }
-      : null;
+    toImageSource(avatarBase64) || toImageSource(currentUser?.photoURL);
 
   // profile menu state
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
@@ -300,7 +314,6 @@ export default function MapboxScreen() {
       const { longitude, latitude } = location.coords;
       const coord: [number, number] = [longitude, latitude];
 
-      // Only set the first time (to avoid camera jitter)
       if (!userLocation) {
         setUserLocation(coord);
         setCameraCenter(coord);
@@ -348,9 +361,7 @@ export default function MapboxScreen() {
   }, []);
 
   const isOwner =
-    !!selectedThought &&
-    !!currentUser &&
-    currentUser.uid === selectedThought.userId;
+    !!selectedThought && !!currentUser && currentUser.uid === selectedThought.userId;
 
   const cleanupCommentsListener = () => {
     if (commentsUnsubRef.current) {
@@ -374,13 +385,9 @@ export default function MapboxScreen() {
   // ---------- 3. Open modal for NEW thought ----------
   const openThoughtModal = () => {
     if (!userLocation) {
-      Alert.alert(
-        "Location not ready",
-        "Waiting for GPS fix. Try again in a moment."
-      );
+      Alert.alert("Location not ready", "Waiting for GPS fix. Try again in a moment.");
       return;
     }
-    // SUPER zoom to your location when adding a thought
     setCameraCenter(userLocation);
     setCameraZoom(19);
 
@@ -398,11 +405,9 @@ export default function MapboxScreen() {
     setIsEditing(false);
     setIsModalVisible(true);
 
-    // zoom camera to the thought location
     setCameraCenter(t.coord);
     setCameraZoom(19);
 
-    // subscribe to this thought's comments
     cleanupCommentsListener();
     commentsUnsubRef.current = firestore()
       .collection("thoughts")
@@ -449,21 +454,15 @@ export default function MapboxScreen() {
       return;
     }
 
-    // EDIT mode
     if (isEditing && selectedThought) {
       try {
-        await firestore()
-          .collection("thoughts")
-          .doc(selectedThought.id)
-          .update({
-            text: thoughtText.trim(),
-            updatedAt: firestore.FieldValue.serverTimestamp(),
-          });
+        await firestore().collection("thoughts").doc(selectedThought.id).update({
+          text: thoughtText.trim(),
+          updatedAt: firestore.FieldValue.serverTimestamp(),
+        });
 
         setIsEditing(false);
-        setSelectedThought((prev) =>
-          prev ? { ...prev, text: thoughtText.trim() } : prev
-        );
+        setSelectedThought((prev) => (prev ? { ...prev, text: thoughtText.trim() } : prev));
       } catch (e) {
         console.error("Error updating thought:", e);
         Alert.alert("Error", "Could not update your thought.");
@@ -471,7 +470,6 @@ export default function MapboxScreen() {
       return;
     }
 
-    // CREATE mode
     if (!userLocation) {
       Alert.alert("Location not ready", "We couldn't get your location yet.");
       return;
@@ -517,10 +515,7 @@ export default function MapboxScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            await firestore()
-              .collection("thoughts")
-              .doc(selectedThought.id)
-              .delete();
+            await firestore().collection("thoughts").doc(selectedThought.id).delete();
 
             setThoughtText("");
             setIsModalVisible(false);
@@ -655,11 +650,7 @@ export default function MapboxScreen() {
 
   const fallbackCenter = userLocation ?? DEFAULT_CENTER;
 
-  // spread overlapping markers only for rendering (keep real coords in DB)
-  const jitteredThoughts = React.useMemo(
-    () => jitterThoughtsForRender(thoughts),
-    [thoughts]
-  );
+  const jitteredThoughts = useMemo(() => jitterThoughtsForRender(thoughts), [thoughts]);
 
   // ---------- UI ----------
   return (
@@ -669,18 +660,15 @@ export default function MapboxScreen() {
         <View style={styles.headerRow}>
           <View>
             <Text style={styles.appTitle}>GeoThoughts</Text>
-            <Text style={styles.appSubtitle}>
-              Drop how you feel on the map
-            </Text>
+            <Text style={styles.appSubtitle}>Drop how you feel on the map</Text>
           </View>
 
-          {/* Profile avatar instead of Logout text */}
           <TouchableOpacity
             style={styles.profileButton}
             onPress={() => setIsProfileModalVisible(true)}
           >
             {avatarSource ? (
-              <Image source={avatarSource} style={styles.profileImage} />
+              <Image source={avatarSource} style={styles.profileImage} resizeMode="cover" />
             ) : (
               <View style={styles.profilePlaceholder}>
                 <Text style={styles.profileInitial}>
@@ -701,17 +689,13 @@ export default function MapboxScreen() {
               animationDuration={1000}
             />
 
-            <Mapbox.UserLocation
-              visible
-              onUpdate={handleUserLocationUpdate}
-            />
+            <Mapbox.UserLocation visible onUpdate={handleUserLocationUpdate} />
 
             {jitteredThoughts.map((t) => {
               const profile = t.userId ? userProfiles[t.userId] : undefined;
-              const markerAvatarSource =
-                profile?.avatarBase64
-                  ? { uri: `data:image/jpeg;base64,${profile.avatarBase64}` }
-                  : null;
+
+              // FIXED: robust base64/data-uri support
+              const markerAvatarSource = toImageSource(profile?.avatarBase64);
               const markerInitial =
                 (t.userName && t.userName.charAt(0).toUpperCase()) || "?";
 
@@ -727,11 +711,10 @@ export default function MapboxScreen() {
                       <Image
                         source={markerAvatarSource}
                         style={styles.markerImage}
+                        resizeMode="cover"
                       />
                     ) : (
-                      <Text style={styles.markerInitial}>
-                        {markerInitial}
-                      </Text>
+                      <Text style={styles.markerInitial}>{markerInitial}</Text>
                     )}
                   </View>
                   <Mapbox.Callout title={`${t.userName}: ${t.text}`} />
@@ -741,13 +724,8 @@ export default function MapboxScreen() {
           </Mapbox.MapView>
         </View>
 
-        {/* Share bar (not overlapping nav bar) */}
-        <View
-          style={[
-            styles.shareBarWrapper,
-            { paddingBottom: insets.bottom + 4 },
-          ]}
-        >
+        {/* Share bar */}
+        <View style={[styles.shareBarWrapper, { paddingBottom: insets.bottom + 4 }]}>
           <TouchableOpacity style={styles.shareBar} onPress={openThoughtModal}>
             <Text style={styles.sharePlus}>＋</Text>
             <Text style={styles.shareText}>Share thought</Text>
@@ -769,7 +747,7 @@ export default function MapboxScreen() {
         >
           <View style={styles.profileModalCard}>
             {avatarSource ? (
-              <Image source={avatarSource} style={styles.profileImageBig} />
+              <Image source={avatarSource} style={styles.profileImageBig} resizeMode="cover" />
             ) : (
               <View style={styles.profilePlaceholderBig}>
                 <Text style={styles.profileInitialBig}>
@@ -778,9 +756,7 @@ export default function MapboxScreen() {
               </View>
             )}
             <Text style={styles.profileName}>{displayName}</Text>
-            {currentUser?.email && (
-              <Text style={styles.profileEmail}>{currentUser.email}</Text>
-            )}
+            {currentUser?.email && <Text style={styles.profileEmail}>{currentUser.email}</Text>}
 
             <TouchableOpacity
               style={styles.profileLogoutButton}
@@ -805,14 +781,9 @@ export default function MapboxScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             {selectedThought ? (
-              // ---------- VIEW THOUGHT + COMMENTS ----------
               <>
-                <Text style={styles.modalTitle}>
-                  Thought by {selectedThought.userName}
-                </Text>
-                <Text style={styles.timestampText}>
-                  {selectedThought.createdAgo}
-                </Text>
+                <Text style={styles.modalTitle}>Thought by {selectedThought.userName}</Text>
+                <Text style={styles.timestampText}>{selectedThought.createdAgo}</Text>
 
                 {isEditing ? (
                   <>
@@ -830,23 +801,19 @@ export default function MapboxScreen() {
                           setThoughtText(selectedThought.text);
                         }}
                       >
-                        <Text style={styles.modalButtonText}>
-                          Cancel edit
-                        </Text>
+                        <Text style={styles.modalButtonText}>Cancel edit</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={[styles.modalButton, styles.modalSave]}
                         onPress={handleSaveThought}
                       >
-                        <Text style={styles.modalButtonText}>Save</Text>
+                        <Text style={[styles.modalButtonText, { color: "#fff" }]}>Save</Text>
                       </TouchableOpacity>
                     </View>
                   </>
                 ) : (
                   <>
-                    <Text style={styles.thoughtText}>
-                      {selectedThought.text}
-                    </Text>
+                    <Text style={styles.thoughtText}>{selectedThought.text}</Text>
                     {isOwner && (
                       <View style={styles.ownerActionsRow}>
                         <TouchableOpacity
@@ -859,12 +826,7 @@ export default function MapboxScreen() {
                           style={[styles.modalButton, styles.modalDelete]}
                           onPress={handleDeleteThought}
                         >
-                          <Text
-                            style={[
-                              styles.modalButtonText,
-                              styles.modalDeleteText,
-                            ]}
-                          >
+                          <Text style={[styles.modalButtonText, styles.modalDeleteText]}>
                             Delete
                           </Text>
                         </TouchableOpacity>
@@ -881,20 +843,15 @@ export default function MapboxScreen() {
                     </Text>
                   ) : (
                     comments.map((c) => {
-                      const isMyComment =
-                        currentUser && currentUser.uid === c.userId;
+                      const isMyComment = currentUser && currentUser.uid === c.userId;
                       const isEditingThis = editingCommentId === c.id;
 
                       return (
                         <View key={c.id} style={styles.commentItem}>
                           <View style={styles.commentHeaderRow}>
                             <View>
-                              <Text style={styles.commentAuthor}>
-                                {c.userName}
-                              </Text>
-                              <Text style={styles.commentTimestamp}>
-                                {c.createdAgo}
-                              </Text>
+                              <Text style={styles.commentAuthor}>{c.userName}</Text>
+                              <Text style={styles.commentTimestamp}>{c.createdAgo}</Text>
                             </View>
                             {isMyComment && !isEditingThis && (
                               <View style={styles.commentActionsRow}>
@@ -902,20 +859,13 @@ export default function MapboxScreen() {
                                   style={styles.commentAction}
                                   onPress={() => handleStartEditComment(c)}
                                 >
-                                  <Text style={styles.commentActionText}>
-                                    Edit
-                                  </Text>
+                                  <Text style={styles.commentActionText}>Edit</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
                                   style={styles.commentAction}
                                   onPress={() => handleDeleteComment(c)}
                                 >
-                                  <Text
-                                    style={[
-                                      styles.commentActionText,
-                                      styles.commentDeleteText,
-                                    ]}
-                                  >
+                                  <Text style={[styles.commentActionText, styles.commentDeleteText]}>
                                     Delete
                                   </Text>
                                 </TouchableOpacity>
@@ -933,27 +883,19 @@ export default function MapboxScreen() {
                               />
                               <View style={styles.commentEditButtonsRow}>
                                 <TouchableOpacity
-                                  style={[
-                                    styles.commentEditButton,
-                                    styles.modalCancel,
-                                  ]}
+                                  style={[styles.commentEditButton, styles.modalCancel]}
                                   onPress={() => {
                                     setEditingCommentId(null);
                                     setEditingCommentText("");
                                   }}
                                 >
-                                  <Text style={styles.modalButtonText}>
-                                    Cancel
-                                  </Text>
+                                  <Text style={styles.modalButtonText}>Cancel</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                  style={[
-                                    styles.commentEditButton,
-                                    styles.modalSave,
-                                  ]}
+                                  style={[styles.commentEditButton, styles.modalSave]}
                                   onPress={handleSaveEditedComment}
                                 >
-                                  <Text style={styles.modalButtonText}>
+                                  <Text style={[styles.modalButtonText, { color: "#fff" }]}>
                                     Save
                                   </Text>
                                 </TouchableOpacity>
@@ -975,10 +917,7 @@ export default function MapboxScreen() {
                     value={commentText}
                     onChangeText={setCommentText}
                   />
-                  <TouchableOpacity
-                    style={styles.sendButton}
-                    onPress={handleAddComment}
-                  >
+                  <TouchableOpacity style={styles.sendButton} onPress={handleAddComment}>
                     <Text style={styles.sendButtonText}>Send</Text>
                   </TouchableOpacity>
                 </View>
@@ -993,7 +932,6 @@ export default function MapboxScreen() {
                 </View>
               </>
             ) : (
-              // ---------- CREATE NEW THOUGHT ----------
               <>
                 <Text style={styles.modalTitle}>What is your thought?</Text>
                 <Text style={styles.timestampText}>It will be pinned here.</Text>
@@ -1015,7 +953,7 @@ export default function MapboxScreen() {
                     style={[styles.modalButton, styles.modalSave]}
                     onPress={handleSaveThought}
                   >
-                    <Text style={styles.modalButtonText}>Save</Text>
+                    <Text style={[styles.modalButtonText, { color: "#fff" }]}>Save</Text>
                   </TouchableOpacity>
                 </View>
               </>
@@ -1058,7 +996,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // Profile avatar in header
   profileButton: {
     width: AVATAR_SIZE,
     height: AVATAR_SIZE,
@@ -1088,7 +1025,6 @@ const styles = StyleSheet.create({
     color: "#1f2937",
   },
 
-  // Profile modal
   profileModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.15)",

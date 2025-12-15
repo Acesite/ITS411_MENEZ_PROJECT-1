@@ -20,17 +20,20 @@ export default function UserRegistration() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+
   const [imageUri, setImageUri] = useState<string | null>(null);
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
+
+  // NOTE: now we store either:
+  // - null
+  // - a full data URI: "data:image/png;base64,...."
+  const [avatarData, setAvatarData] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(false);
 
   const router = useRouter();
 
-  // ----- pick profile image -----
   const handlePickImage = async () => {
-    const { status } =
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
-
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert(
         "Permission required",
@@ -43,14 +46,18 @@ export default function UserRegistration() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.5, // compress a bit
-      base64: true, // we will store base64 in Firestore
+      quality: 0.5,
+      base64: true,
     });
 
     if (!result.canceled) {
       const asset = result.assets[0];
       setImageUri(asset.uri);
-      setImageBase64(asset.base64 ?? null);
+
+      const mime = asset.mimeType ?? "image/jpeg";
+      const dataUri = asset.base64 ? `data:${mime};base64,${asset.base64}` : null;
+
+      setAvatarData(dataUri);
     }
   };
 
@@ -69,35 +76,21 @@ export default function UserRegistration() {
     setLoading(true);
 
     try {
-      // 1) Create auth user
       const userCredential = await auth().createUserWithEmailAndPassword(
         cleanEmail,
         password
       );
       const createdUser = userCredential.user;
-      console.log("Created user:", createdUser.uid, createdUser.email);
 
-      // 2) Update Firebase Auth profile (displayName only)
       const fbUser = auth().currentUser;
       if (fbUser) {
-        await fbUser.updateProfile({
-          displayName: username,
-        });
-
+        await fbUser.updateProfile({ displayName: username });
         await fbUser.reload();
-        console.log(
-          "After reload currentUser:",
-          fbUser.displayName,
-          fbUser.photoURL
-        );
-      } else {
-        console.log("No currentUser right after signup 🤔");
       }
 
-      // 3) Save profile info in Firestore (including avatar base64)
       await firestore().collection("userProfiles").doc(createdUser.uid).set({
         displayName: username,
-        avatarBase64: imageBase64 ?? null,
+        avatarBase64: avatarData ?? null, // may be full data URI
         createdAt: firestore.FieldValue.serverTimestamp(),
       });
 
@@ -105,10 +98,7 @@ export default function UserRegistration() {
       router.replace("/mapbox");
     } catch (error: any) {
       console.log("Registration error:", error);
-      Alert.alert(
-        "Registration Failed",
-        error.message || "Something went wrong."
-      );
+      Alert.alert("Registration Failed", error.message || "Something went wrong.");
     } finally {
       setLoading(false);
     }
@@ -118,10 +108,9 @@ export default function UserRegistration() {
     <View style={styles.container}>
       <Text style={styles.title}>Register</Text>
 
-      {/* Profile picture preview */}
       <TouchableOpacity onPress={handlePickImage} style={styles.avatarWrapper}>
         {imageUri ? (
-          <Image source={{ uri: imageUri }} style={styles.avatar} />
+          <Image source={{ uri: imageUri }} style={styles.avatar} resizeMode="cover" />
         ) : (
           <View style={styles.avatarPlaceholder}>
             <Text style={styles.avatarInitial}>+</Text>
