@@ -41,7 +41,11 @@ export default function Login() {
       await auth().signInWithEmailAndPassword(cleanEmail, password);
 
       setUser({ name: cleanEmail.split("@")[0], email: cleanEmail });
-      router.replace("/mapbox");
+      router.replace({
+  pathname: "/mapbox",
+  params: { refresh: "1" }, // tell mapbox screen this came from a fresh login
+});
+
     } catch (e: any) {
       setError(e?.message ?? "Login failed");
     } finally {

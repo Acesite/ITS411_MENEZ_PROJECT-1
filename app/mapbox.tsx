@@ -3,18 +3,18 @@ import auth from "@react-native-firebase/auth";
 import firestore from "@react-native-firebase/firestore";
 import Mapbox from "@rnmapbox/maps";
 import * as Location from "expo-location";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert,
-  Image,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    Image,
+    Modal,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -153,6 +153,13 @@ function jitterThoughtsForRender(thoughts: Thought[]): ThoughtWithRenderCoord[] 
 export default function MapboxScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+   // get query params like /mapbox?refresh=1
+  const { refresh } = useLocalSearchParams<{ refresh?: string }>();
+
+  // will be computed once when this screen mounts
+  const [mapKey] = useState(() =>
+    refresh === "1" ? `map-login-${Date.now()}` : "map-default"
+  );
 
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [thoughts, setThoughts] = useState<Thought[]>([]);
@@ -176,9 +183,12 @@ export default function MapboxScreen() {
 
   // ---- AUTH USER STATE (for displayName + avatar) ----
   const [currentUser, setCurrentUser] = useState(auth().currentUser);
-  const [avatarBase64, setAvatarBase64] = useState<string | null>(null);
+  // track if we already refreshed the map for this logged-in user
+const [hasRefreshedForUser, setHasRefreshedForUser] = useState(false);
 
-  // Keep a live listener for the current user's profile (so avatar updates immediately)
+
+  // dedicated profile state for current user (fixes "need to relog" issue)
+  const [myProfile, setMyProfile] = useState<UserProfile | null>(null);
   const myProfileUnsubRef = useRef<null | (() => void)>(null);
 
   // All user profiles (for markers)
@@ -187,17 +197,17 @@ export default function MapboxScreen() {
   // Subscribe to auth state changes + subscribe to current user's profile doc
   useEffect(() => {
     const unsubscribe = auth().onAuthStateChanged(async (user) => {
-      // cleanup old listener
+      // cleanup old profile listener if any
       if (myProfileUnsubRef.current) {
         myProfileUnsubRef.current();
         myProfileUnsubRef.current = null;
       }
+      setMyProfile(null);
 
       if (user) {
         try {
           await user.reload();
           const fresh = auth().currentUser;
-
           const effectiveUser = fresh ?? user;
           setCurrentUser(effectiveUser);
 
@@ -208,28 +218,27 @@ export default function MapboxScreen() {
               .onSnapshot(
                 (docSnap) => {
                   if (docSnap.exists()) {
-                    const data = docSnap.data() as any;
-                    setAvatarBase64(data?.avatarBase64 ?? null);
+                    const d = docSnap.data() as any;
+                    setMyProfile({
+                      displayName: d.displayName ?? null,
+                      avatarBase64: d.avatarBase64 ?? null,
+                    });
                   } else {
-                    setAvatarBase64(null);
+                    setMyProfile(null);
                   }
                 },
                 (err) => {
                   console.log("Error listening to my profile:", err);
-                  setAvatarBase64(null);
+                  setMyProfile(null);
                 }
               );
-          } else {
-            setAvatarBase64(null);
           }
         } catch (e) {
           console.log("Error reloading user:", e);
           setCurrentUser(user);
-          setAvatarBase64(null);
         }
       } else {
         setCurrentUser(null);
-        setAvatarBase64(null);
       }
     });
 
@@ -241,6 +250,21 @@ export default function MapboxScreen() {
       }
     };
   }, []);
+
+  // When a user is logged in and we haven't refreshed yet, reset map state once
+useEffect(() => {
+  if (currentUser && !hasRefreshedForUser) {
+    console.log("Refreshing map for user:", currentUser.uid);
+
+    // Reset map state; Mapbox.UserLocation will set the new center
+    setUserLocation(null);
+    setCameraCenter(null);
+    setCameraZoom(5); // or any default zoom you like
+
+    setHasRefreshedForUser(true);
+  }
+}, [currentUser?.uid, hasRefreshedForUser]);
+
 
   // Subscribe to all user profiles (used for markers)
   useEffect(() => {
@@ -274,12 +298,13 @@ export default function MapboxScreen() {
   }, [currentUser, router]);
 
   const displayName =
+    myProfile?.displayName ||
     currentUser?.displayName ||
     (currentUser?.email ? currentUser.email.split("@")[0] : "User");
 
-  // FIXED: robust avatar source (base64 png/jpg + data uri + url)
+  // Prefer myProfile avatar; fall back to auth photoURL
   const avatarSource =
-    toImageSource(avatarBase64) || toImageSource(currentUser?.photoURL);
+    toImageSource(myProfile?.avatarBase64) || toImageSource(currentUser?.photoURL);
 
   // profile menu state
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
@@ -680,49 +705,54 @@ export default function MapboxScreen() {
         </View>
 
         {/* Map card */}
-        <View style={styles.mapCard}>
-          <Mapbox.MapView style={styles.map} styleURL={Mapbox.StyleURL.Street}>
-            <Mapbox.Camera
-              centerCoordinate={cameraCenter ?? fallbackCenter}
-              zoomLevel={cameraZoom}
-              animationMode="flyTo"
-              animationDuration={1000}
-            />
+<View style={styles.mapCard}>
+  <Mapbox.MapView
+    key={mapKey} // <-- this forces a remount when coming from login with refresh=1
+    style={styles.map}
+    styleURL={Mapbox.StyleURL.Street}
+  >
+    <Mapbox.Camera
+      centerCoordinate={cameraCenter ?? fallbackCenter}
+      zoomLevel={cameraZoom}
+      animationMode="flyTo"
+      animationDuration={1000}
+    />
 
-            <Mapbox.UserLocation visible onUpdate={handleUserLocationUpdate} />
+    <Mapbox.UserLocation visible onUpdate={handleUserLocationUpdate} />
 
-            {jitteredThoughts.map((t) => {
-              const profile = t.userId ? userProfiles[t.userId] : undefined;
+    {jitteredThoughts.map((t) => {
+      const profile = t.userId ? userProfiles[t.userId] : undefined;
 
-              // FIXED: robust base64/data-uri support
-              const markerAvatarSource = toImageSource(profile?.avatarBase64);
-              const markerInitial =
-                (t.userName && t.userName.charAt(0).toUpperCase()) || "?";
+      // FIXED: robust base64/data-uri support
+      const markerAvatarSource = toImageSource(profile?.avatarBase64);
+      const markerInitial =
+        (t.userName && t.userName.charAt(0).toUpperCase()) || "?";
 
-              return (
-                <Mapbox.PointAnnotation
-                  key={t.id}
-                  id={t.id}
-                  coordinate={t.renderCoord}
-                  onSelected={() => handleSelectThought(t)}
-                >
-                  <View style={styles.marker}>
-                    {markerAvatarSource ? (
-                      <Image
-                        source={markerAvatarSource}
-                        style={styles.markerImage}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <Text style={styles.markerInitial}>{markerInitial}</Text>
-                    )}
-                  </View>
-                  <Mapbox.Callout title={`${t.userName}: ${t.text}`} />
-                </Mapbox.PointAnnotation>
-              );
-            })}
-          </Mapbox.MapView>
-        </View>
+      return (
+        <Mapbox.PointAnnotation
+          key={t.id}
+          id={t.id}
+          coordinate={t.renderCoord}
+          onSelected={() => handleSelectThought(t)}
+        >
+          <View style={styles.marker}>
+            {markerAvatarSource ? (
+              <Image
+                source={markerAvatarSource}
+                style={styles.markerImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <Text style={styles.markerInitial}>{markerInitial}</Text>
+            )}
+          </View>
+          <Mapbox.Callout title={`${t.userName}: ${t.text}`} />
+        </Mapbox.PointAnnotation>
+      );
+    })}
+  </Mapbox.MapView>
+</View>
+
 
         {/* Share bar */}
         <View style={[styles.shareBarWrapper, { paddingBottom: insets.bottom + 4 }]}>

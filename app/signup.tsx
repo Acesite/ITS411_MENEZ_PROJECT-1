@@ -2,12 +2,17 @@
 import auth from "@react-native-firebase/auth";
 import firestore from "@react-native-firebase/firestore";
 import * as ImagePicker from "expo-image-picker";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
+  SafeAreaView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -61,125 +66,235 @@ export default function UserRegistration() {
     }
   };
 
-  const handleRegister = async () => {
-    const cleanEmail = email.trim().toLowerCase();
+ const handleRegister = async () => {
+  const cleanEmail = email.trim().toLowerCase();
 
-    if (!username || !cleanEmail || !password || !confirmPassword) {
-      Alert.alert("Error", "All fields are required.");
-      return;
+  if (!username || !cleanEmail || !password || !confirmPassword) {
+    Alert.alert("Error", "All fields are required.");
+    return;
+  }
+  if (password !== confirmPassword) {
+    Alert.alert("Error", "Passwords do not match.");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const userCredential = await auth().createUserWithEmailAndPassword(
+      cleanEmail,
+      password
+    );
+    const createdUser = userCredential.user;
+
+    const fbUser = auth().currentUser;
+    if (fbUser) {
+      await fbUser.updateProfile({ displayName: username });
+      await fbUser.reload();
     }
-    if (password !== confirmPassword) {
-      Alert.alert("Error", "Passwords do not match.");
-      return;
-    }
 
-    setLoading(true);
+    await firestore().collection("userProfiles").doc(createdUser.uid).set({
+      displayName: username,
+      avatarBase64: avatarData ?? null,
+      createdAt: firestore.FieldValue.serverTimestamp(),
+    });
 
-    try {
-      const userCredential = await auth().createUserWithEmailAndPassword(
-        cleanEmail,
-        password
-      );
-      const createdUser = userCredential.user;
+    Alert.alert(
+      "Success",
+      "Registration complete! Please log in with your new account."
+    );
 
-      const fbUser = auth().currentUser;
-      if (fbUser) {
-        await fbUser.updateProfile({ displayName: username });
-        await fbUser.reload();
-      }
-
-      await firestore().collection("userProfiles").doc(createdUser.uid).set({
-        displayName: username,
-        avatarBase64: avatarData ?? null, // may be full data URI
-        createdAt: firestore.FieldValue.serverTimestamp(),
-      });
-
-      Alert.alert("Success", "Registration complete!");
-      router.replace("/mapbox");
-    } catch (error: any) {
-      console.log("Registration error:", error);
-      Alert.alert("Registration Failed", error.message || "Something went wrong.");
-    } finally {
-      setLoading(false);
-    }
-  };
+    // Force going back to login
+    await auth().signOut();
+    router.replace("/");
+  } catch (error: any) {
+    console.log("Registration error:", error);
+    Alert.alert("Registration Failed", error.message || "Something went wrong.");
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Register</Text>
-
-      <TouchableOpacity onPress={handlePickImage} style={styles.avatarWrapper}>
-        {imageUri ? (
-          <Image source={{ uri: imageUri }} style={styles.avatar} resizeMode="cover" />
-        ) : (
-          <View style={styles.avatarPlaceholder}>
-            <Text style={styles.avatarInitial}>+</Text>
-          </View>
-        )}
-      </TouchableOpacity>
-      <Text style={styles.avatarText}>Tap to choose profile picture</Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Username"
-        value={username}
-        onChangeText={setUsername}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Confirm Password"
-        value={confirmPassword}
-        onChangeText={setConfirmPassword}
-        secureTextEntry
-      />
-
-      <TouchableOpacity
-        style={[styles.button, loading && { opacity: 0.7 }]}
-        onPress={handleRegister}
-        disabled={loading}
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" />
+      <LinearGradient
+        colors={["#071A2B", "#071A2B", "#0B2A3F"]}
+        style={styles.bg}
       >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Register</Text>
-        )}
-      </TouchableOpacity>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.kb}
+        >
+          {/* Brand header to match login */}
+          <View style={styles.header}>
+            <View style={styles.brandRow}>
+              <View style={styles.pinBadge}>
+                <Text style={styles.pinDot}>●</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.brand}>Geo Thoughts</Text>
+                <Text style={styles.tagline}>
+                  Create your account and start pinning where you are.
+                </Text>
+              </View>
+            </View>
 
-      <View style={styles.footer}>
-        <Text>Already have an account?</Text>
-        <TouchableOpacity onPress={() => router.push("/")}>
-          <Text style={styles.loginText}> Log In</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
+            <View style={styles.statsRow}>
+              <View style={styles.statPill}>
+                <Text style={styles.statLabel}>Public</Text>
+              </View>
+              <View style={styles.statPill}>
+                <Text style={styles.statLabel}>Pinned</Text>
+              </View>
+              <View style={styles.statPill}>
+                <Text style={styles.statLabel}>Nearby</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Card (replaces old white container) */}
+          <View style={styles.card}>
+            <Text style={styles.title}>Register</Text>
+
+            {/* Avatar picker */}
+            <TouchableOpacity
+              onPress={handlePickImage}
+              style={styles.avatarWrapper}
+              activeOpacity={0.85}
+            >
+              {imageUri ? (
+                <Image
+                  source={{ uri: imageUri }}
+                  style={styles.avatar}
+                  resizeMode="cover"
+                />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Text style={styles.avatarInitial}>+</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            <Text style={styles.avatarText}>Tap to choose profile picture</Text>
+
+            {/* Fields (same logic, themed UI) */}
+            <TextInput
+              style={styles.input}
+              placeholder="Username"
+              placeholderTextColor="#93A7BD"
+              value={username}
+              onChangeText={setUsername}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Email"
+              placeholderTextColor="#93A7BD"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor="#93A7BD"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Confirm Password"
+              placeholderTextColor="#93A7BD"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry
+            />
+
+            <TouchableOpacity
+              style={[styles.button, loading && { opacity: 0.7 }]}
+              onPress={handleRegister}
+              disabled={loading}
+              activeOpacity={0.9}
+            >
+              {loading ? (
+                <ActivityIndicator />
+              ) : (
+                <Text style={styles.buttonText}>Register</Text>
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.footer}>
+              <Text style={styles.footerText}>Already have an account?</Text>
+              <TouchableOpacity onPress={() => router.push("/")}>
+                <Text style={styles.loginText}> Log In</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <Text style={styles.hint}>
+            You control what you share. Change your profile anytime.
+          </Text>
+        </KeyboardAvoidingView>
+      </LinearGradient>
+    </SafeAreaView>
   );
 }
 
 const AVATAR_SIZE = 96;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: "#fff" },
-  title: {
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 20,
-    textAlign: "center",
+  // Outer layout (same idea as login)
+  safe: { flex: 1, backgroundColor: "#071A2B" },
+  bg: { flex: 1 },
+  kb: { flex: 1, justifyContent: "center", padding: 18 },
+
+  header: { marginBottom: 14 },
+  brandRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+
+  pinBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: "rgba(96, 210, 255, 0.14)",
+    borderColor: "rgba(96, 210, 255, 0.35)",
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
+  pinDot: { color: "#7DE0FF", fontSize: 14, fontWeight: "900" },
+
+  brand: { color: "#FFFFFF", fontSize: 26, fontWeight: "900" },
+  tagline: { color: "#B1C3D7", marginTop: 4, lineHeight: 18 },
+
+  statsRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  statPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+  },
+  statLabel: { color: "#D7E6F6", fontSize: 12, fontWeight: "800" },
+
+  // Card (replaces old white container)
+  card: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    borderRadius: 18,
+    padding: 16,
+  },
+
+  title: {
+    fontSize: 18,
+    fontWeight: "900",
+    marginBottom: 12,
+    textAlign: "left",
+    color: "#FFFFFF",
+  },
+
   avatarWrapper: {
     alignSelf: "center",
     width: AVATAR_SIZE,
@@ -187,7 +302,7 @@ const styles = StyleSheet.create({
     borderRadius: AVATAR_SIZE / 2,
     overflow: "hidden",
     borderWidth: 2,
-    borderColor: "#e5e7eb",
+    borderColor: "rgba(255,255,255,0.25)",
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 8,
@@ -200,44 +315,59 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     borderRadius: AVATAR_SIZE / 2,
-    backgroundColor: "#e5e7eb",
+    backgroundColor: "rgba(255,255,255,0.1)",
     justifyContent: "center",
     alignItems: "center",
   },
   avatarInitial: {
     fontSize: 40,
-    color: "#6b7280",
-    fontWeight: "600",
+    color: "#7DE0FF",
+    fontWeight: "900",
   },
   avatarText: {
     textAlign: "center",
-    color: "#6b7280",
+    color: "#A9BED4",
     marginBottom: 16,
     fontSize: 12,
   },
+
   input: {
+    backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "#ccc",
-    padding: 10,
-    marginBottom: 10,
-    borderRadius: 5,
-  },
-  button: {
-    backgroundColor: "#2563eb",
+    borderColor: "rgba(255,255,255,0.12)",
+    color: "#FFFFFF",
+    paddingHorizontal: 12,
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 12,
+    fontSize: 14,
+    marginBottom: 10,
+  },
+
+  button: {
+    backgroundColor: "#60D2FF",
+    paddingVertical: 12,
+    borderRadius: 12,
     alignItems: "center",
     marginTop: 4,
   },
   buttonText: {
-    color: "#fff",
-    fontWeight: "600",
-    fontSize: 16,
+    color: "#062033",
+    fontWeight: "900",
+    fontSize: 14,
   },
+
   footer: {
     flexDirection: "row",
     justifyContent: "center",
-    marginTop: 20,
+    marginTop: 16,
   },
-  loginText: { color: "blue", marginLeft: 5 },
+  footerText: { color: "#A9BED4" },
+  loginText: { color: "#60D2FF", fontWeight: "900" },
+
+  hint: {
+    marginTop: 14,
+    textAlign: "center",
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 12,
+  },
 });
