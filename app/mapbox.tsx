@@ -6,15 +6,15 @@ import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-    Alert,
-    Image,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Image,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -153,7 +153,8 @@ function jitterThoughtsForRender(thoughts: Thought[]): ThoughtWithRenderCoord[] 
 export default function MapboxScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-   // get query params like /mapbox?refresh=1
+
+  // get query params like /mapbox?refresh=1
   const { refresh } = useLocalSearchParams<{ refresh?: string }>();
 
   // will be computed once when this screen mounts
@@ -184,8 +185,7 @@ export default function MapboxScreen() {
   // ---- AUTH USER STATE (for displayName + avatar) ----
   const [currentUser, setCurrentUser] = useState(auth().currentUser);
   // track if we already refreshed the map for this logged-in user
-const [hasRefreshedForUser, setHasRefreshedForUser] = useState(false);
-
+  const [hasRefreshedForUser, setHasRefreshedForUser] = useState(false);
 
   // dedicated profile state for current user (fixes "need to relog" issue)
   const [myProfile, setMyProfile] = useState<UserProfile | null>(null);
@@ -252,19 +252,18 @@ const [hasRefreshedForUser, setHasRefreshedForUser] = useState(false);
   }, []);
 
   // When a user is logged in and we haven't refreshed yet, reset map state once
-useEffect(() => {
-  if (currentUser && !hasRefreshedForUser) {
-    console.log("Refreshing map for user:", currentUser.uid);
+  useEffect(() => {
+    if (currentUser && !hasRefreshedForUser) {
+      console.log("Refreshing map for user:", currentUser.uid);
 
-    // Reset map state; Mapbox.UserLocation will set the new center
-    setUserLocation(null);
-    setCameraCenter(null);
-    setCameraZoom(5); // or any default zoom you like
+      // Reset map state; Mapbox.UserLocation will set the new center
+      setUserLocation(null);
+      setCameraCenter(null);
+      setCameraZoom(5); // or any default zoom you like
 
-    setHasRefreshedForUser(true);
-  }
-}, [currentUser?.uid, hasRefreshedForUser]);
-
+      setHasRefreshedForUser(true);
+    }
+  }, [currentUser?.uid, hasRefreshedForUser]);
 
   // Subscribe to all user profiles (used for markers)
   useEffect(() => {
@@ -705,54 +704,53 @@ useEffect(() => {
         </View>
 
         {/* Map card */}
-<View style={styles.mapCard}>
-  <Mapbox.MapView
-    key={mapKey} // <-- this forces a remount when coming from login with refresh=1
-    style={styles.map}
-    styleURL={Mapbox.StyleURL.Street}
-  >
-    <Mapbox.Camera
-      centerCoordinate={cameraCenter ?? fallbackCenter}
-      zoomLevel={cameraZoom}
-      animationMode="flyTo"
-      animationDuration={1000}
-    />
+        <View style={styles.mapCard}>
+          <Mapbox.MapView
+            key={mapKey}
+            style={styles.map}
+            styleURL={Mapbox.StyleURL.Street}
+          >
+            <Mapbox.Camera
+              centerCoordinate={cameraCenter ?? fallbackCenter}
+              zoomLevel={cameraZoom}
+              animationMode="flyTo"
+              animationDuration={1000}
+            />
 
-    <Mapbox.UserLocation visible onUpdate={handleUserLocationUpdate} />
+            <Mapbox.UserLocation visible onUpdate={handleUserLocationUpdate} />
 
-    {jitteredThoughts.map((t) => {
-      const profile = t.userId ? userProfiles[t.userId] : undefined;
+            {jitteredThoughts.map((t) => {
+              const profile = t.userId ? userProfiles[t.userId] : undefined;
 
-      // FIXED: robust base64/data-uri support
-      const markerAvatarSource = toImageSource(profile?.avatarBase64);
-      const markerInitial =
-        (t.userName && t.userName.charAt(0).toUpperCase()) || "?";
+              // FIXED: robust base64/data-uri support
+              const markerAvatarSource = toImageSource(profile?.avatarBase64);
+              const markerInitial =
+                (t.userName && t.userName.charAt(0).toUpperCase()) || "?";
 
-      return (
-        <Mapbox.PointAnnotation
-          key={t.id}
-          id={t.id}
-          coordinate={t.renderCoord}
-          onSelected={() => handleSelectThought(t)}
-        >
-          <View style={styles.marker}>
-            {markerAvatarSource ? (
-              <Image
-                source={markerAvatarSource}
-                style={styles.markerImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <Text style={styles.markerInitial}>{markerInitial}</Text>
-            )}
-          </View>
-          <Mapbox.Callout title={`${t.userName}: ${t.text}`} />
-        </Mapbox.PointAnnotation>
-      );
-    })}
-  </Mapbox.MapView>
-</View>
-
+              return (
+                <Mapbox.PointAnnotation
+                  key={t.id}
+                  id={t.id}
+                  coordinate={t.renderCoord}
+                  onSelected={() => handleSelectThought(t)}
+                >
+                  <View style={styles.marker}>
+                    {markerAvatarSource ? (
+                      <Image
+                        source={markerAvatarSource}
+                        style={styles.markerImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Text style={styles.markerInitial}>{markerInitial}</Text>
+                    )}
+                  </View>
+                  <Mapbox.Callout title={`${t.userName}: ${t.text}`} />
+                </Mapbox.PointAnnotation>
+              );
+            })}
+          </Mapbox.MapView>
+        </View>
 
         {/* Share bar */}
         <View style={[styles.shareBarWrapper, { paddingBottom: insets.bottom + 4 }]}>
@@ -1002,7 +1000,7 @@ const AVATAR_SIZE_BIG = 72;
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f3f4f6",
+    backgroundColor: "#071A2B", // match login safe background
   },
   screen: {
     flex: 1,
@@ -1014,15 +1012,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 12,
+    marginTop: 4,
   },
   appTitle: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#020617",
+    color: "#FFFFFF", // white like login brand
   },
   appSubtitle: {
     fontSize: 14,
-    color: "#6b7280",
+    color: "#B1C3D7", // same tone as login tagline
     marginTop: 2,
   },
 
@@ -1032,10 +1031,10 @@ const styles = StyleSheet.create({
     borderRadius: AVATAR_SIZE / 2,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: "rgba(255,255,255,0.25)",
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#e5e7eb",
+    backgroundColor: "rgba(255,255,255,0.08)",
   },
   profileImage: {
     width: "100%",
@@ -1047,17 +1046,17 @@ const styles = StyleSheet.create({
     borderRadius: AVATAR_SIZE / 2,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#cbd5f5",
+    backgroundColor: "rgba(255,255,255,0.14)",
   },
   profileInitial: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#1f2937",
+    color: "#7DE0FF", // accent like login pin
   },
 
   profileModalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.15)",
+    backgroundColor: "rgba(0,0,0,0.25)",
     justifyContent: "flex-start",
     alignItems: "flex-end",
     paddingTop: 56,
@@ -1065,15 +1064,17 @@ const styles = StyleSheet.create({
   },
   profileModalCard: {
     width: 220,
-    backgroundColor: "#fff",
+    backgroundColor: "#0B2A3F",
     borderRadius: 16,
     padding: 16,
     shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 10,
+    shadowOpacity: 0.35,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 16,
     elevation: 6,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
   },
   profileImageBig: {
     width: AVATAR_SIZE_BIG,
@@ -1087,22 +1088,22 @@ const styles = StyleSheet.create({
     borderRadius: AVATAR_SIZE_BIG / 2,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#cbd5f5",
+    backgroundColor: "rgba(255,255,255,0.14)",
     marginBottom: 8,
   },
   profileInitialBig: {
     fontSize: 26,
     fontWeight: "700",
-    color: "#1f2937",
+    color: "#7DE0FF",
   },
   profileName: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#111827",
+    color: "#FFFFFF",
   },
   profileEmail: {
     fontSize: 12,
-    color: "#6b7280",
+    color: "#A9BED4",
     marginBottom: 12,
   },
   profileLogoutButton: {
@@ -1123,7 +1124,9 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 24,
     overflow: "hidden",
-    backgroundColor: "#e5e7eb",
+    backgroundColor: "rgba(255,255,255,0.06)", // match login card style
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
   },
   map: {
     flex: 1,
@@ -1136,23 +1139,23 @@ const styles = StyleSheet.create({
   shareBar: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#020617",
+    backgroundColor: "#60D2FF", // login primary button
     paddingHorizontal: 28,
     paddingVertical: 12,
     borderRadius: 999,
     shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 10,
+    shadowOpacity: 0.35,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 16,
     elevation: 4,
   },
   sharePlus: {
-    color: "#e5e7eb",
+    color: "#062033", // same as login button text
     fontSize: 20,
     marginRight: 8,
   },
   shareText: {
-    color: "#f9fafb",
+    color: "#062033",
     fontSize: 16,
     fontWeight: "600",
   },
@@ -1161,11 +1164,11 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "#e5e7eb",
+    backgroundColor: "rgba(255,255,255,0.92)",
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 2,
-    borderColor: "#fff",
+    borderColor: "#071A2B",
     overflow: "hidden",
   },
   markerImage: {
@@ -1175,7 +1178,7 @@ const styles = StyleSheet.create({
   markerInitial: {
     fontSize: 14,
     fontWeight: "700",
-    color: "#111827",
+    color: "#062033",
   },
 
   modalOverlay: {

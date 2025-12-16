@@ -43,7 +43,7 @@ export default function Login() {
       setUser({ name: cleanEmail.split("@")[0], email: cleanEmail });
       router.replace({
   pathname: "/mapbox",
-  params: { refresh: "1" }, // tell mapbox screen this came from a fresh login
+  params: { refresh: "2" }, // tell mapbox screen this came from a fresh login
 });
 
     } catch (e: any) {
