@@ -6,6 +6,7 @@ import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Modal,
@@ -52,33 +53,39 @@ const formatTimeAgo = (date: Date | null): string => {
   return diffYear === 1 ? "1 year ago" : `${diffYear} years ago`;
 };
 
-// --- Robust image helpers (FIX for PNG/JPEG base64 + data URI + URL) ---
+// --- Robust image helpers ---
 function guessMimeFromBase64(b64: string) {
-  // JPEG base64 often starts with "/9j/"
-  if (b64.startsWith("/9j/")) return "image/jpeg";
-  // PNG base64 often starts with "iVBOR"
-  if (b64.startsWith("iVBOR")) return "image/png";
+  if (b64.startsWith("/9j/")) return "image/jpeg"; // JPEG
+  if (b64.startsWith("iVBOR")) return "image/png"; // PNG
+  if (b64.startsWith("R0lG")) return "image/gif"; // GIF
   return "image/jpeg";
 }
 
 function toImageSource(raw?: string | null) {
   if (!raw) return null;
 
-  // Already a full data URI
-  if (raw.startsWith("data:image/")) return { uri: raw };
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
 
-  // Looks like a URL
-  if (
-    raw.startsWith("http://") ||
-    raw.startsWith("https://") ||
-    raw.startsWith("file:")
-  ) {
-    return { uri: raw };
+  if (trimmed.startsWith("data:image/")) {
+    return { uri: trimmed };
   }
 
-  // Assume plain base64
-  const mime = guessMimeFromBase64(raw);
-  return { uri: `data:${mime};base64,${raw}` };
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("file:")
+  ) {
+    return { uri: trimmed };
+  }
+
+  try {
+    const mime = guessMimeFromBase64(trimmed);
+    return { uri: `data:${mime};base64,${trimmed}` };
+  } catch (error) {
+    console.log("Error creating image source:", error);
+    return null;
+  }
 }
 
 // ---------- Types ----------
@@ -103,16 +110,15 @@ type Comment = {
 
 type UserProfile = {
   displayName?: string | null;
-  avatarBase64?: string | null; // may be raw base64 OR "data:image/...;base64,..."
+  avatarBase64?: string | null;
 };
 
 type ThoughtWithRenderCoord = Thought & {
   renderCoord: [number, number];
 };
 
-const DEFAULT_CENTER: [number, number] = [123.8854, 10.3157]; // fallback center
+const DEFAULT_CENTER: [number, number] = [123.8854, 10.3157];
 
-// Spread overlapping thoughts a tiny bit so markers aren't exactly stacked
 function jitterThoughtsForRender(thoughts: Thought[]): ThoughtWithRenderCoord[] {
   const groups: Record<string, Thought[]> = {};
   thoughts.forEach((t) => {
@@ -141,7 +147,10 @@ function jitterThoughtsForRender(thoughts: Thought[]): ThoughtWithRenderCoord[] 
       const deltaLat = (Math.sin(angle) * radiusMeters) / metersPerDegLat;
       const deltaLng = (Math.cos(angle) * radiusMeters) / metersPerDegLng;
 
-      const jittered: [number, number] = [baseLng + deltaLng, baseLat + deltaLat];
+      const jittered: [number, number] = [
+        baseLng + deltaLng,
+        baseLat + deltaLat,
+      ];
 
       result.push({ ...t, renderCoord: jittered });
     });
@@ -150,19 +159,21 @@ function jitterThoughtsForRender(thoughts: Thought[]): ThoughtWithRenderCoord[] 
   return result;
 }
 
+const AVATAR_SIZE = 40;
+const AVATAR_SIZE_BIG = 72;
+
 export default function MapboxScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-
-  // get query params like /mapbox?refresh=1
   const { refresh } = useLocalSearchParams<{ refresh?: string }>();
 
-  // will be computed once when this screen mounts
   const [mapKey] = useState(() =>
     refresh === "1" ? `map-login-${Date.now()}` : "map-default"
   );
 
-  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(
+    null
+  );
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [thoughtText, setThoughtText] = useState("");
@@ -178,27 +189,31 @@ export default function MapboxScreen() {
 
   const commentsUnsubRef = useRef<null | (() => void)>(null);
 
-  // camera state
-  const [cameraCenter, setCameraCenter] = useState<[number, number] | null>(null);
+  const [cameraCenter, setCameraCenter] = useState<[number, number] | null>(
+    null
+  );
   const [cameraZoom, setCameraZoom] = useState<number>(5);
 
-  // ---- AUTH USER STATE (for displayName + avatar) ----
   const [currentUser, setCurrentUser] = useState(auth().currentUser);
-  // track if we already refreshed the map for this logged-in user
   const [hasRefreshedForUser, setHasRefreshedForUser] = useState(false);
 
-  // dedicated profile state for current user (fixes "need to relog" issue)
   const [myProfile, setMyProfile] = useState<UserProfile | null>(null);
   const myProfileUnsubRef = useRef<null | (() => void)>(null);
 
-  // All user profiles (for markers)
-  const [userProfiles, setUserProfiles] = useState<Record<string, UserProfile>>({});
+  const [userProfiles, setUserProfiles] = useState<
+    Record<string, UserProfile>
+  >({});
 
-  // Subscribe to auth state changes + subscribe to current user's profile doc
+  const [avatarLoading, setAvatarLoading] = useState(true);
+  const [avatarSource, setAvatarSource] = useState<{ uri: string } | null>(
+    null
+  );
+
+  // ---------- Auth + profile subscription ----------
   useEffect(() => {
     const unsubscribe = auth().onAuthStateChanged(async (user) => {
       // cleanup old profile listener if any
-      if (myProfileUnsubRef.current) {
+      if (typeof myProfileUnsubRef.current === "function") {
         myProfileUnsubRef.current();
         myProfileUnsubRef.current = null;
       }
@@ -212,26 +227,48 @@ export default function MapboxScreen() {
           setCurrentUser(effectiveUser);
 
           if (effectiveUser?.uid) {
-            myProfileUnsubRef.current = firestore()
-              .collection("userProfiles")
-              .doc(effectiveUser.uid)
-              .onSnapshot(
-                (docSnap) => {
-                  if (docSnap.exists()) {
-                    const d = docSnap.data() as any;
-                    setMyProfile({
-                      displayName: d.displayName ?? null,
-                      avatarBase64: d.avatarBase64 ?? null,
-                    });
-                  } else {
-                    setMyProfile(null);
-                  }
-                },
-                (err) => {
-                  console.log("Error listening to my profile:", err);
-                  setMyProfile(null);
-                }
-              );
+            // initial fetch
+            try {
+             const profileDoc = await firestore()
+  .collection("userProfiles")
+  .doc(effectiveUser.uid)
+  .get();
+
+// Use data() instead of exists to avoid TS2774
+const d = profileDoc.data() as any | undefined;
+if (d) {
+  setMyProfile({
+    displayName: d.displayName ?? null,
+    avatarBase64: d.avatarBase64 ?? null,
+  });
+}
+
+            } catch (fetchErr) {
+              console.log("Error fetching initial profile:", fetchErr);
+            }
+
+            // realtime listener
+           myProfileUnsubRef.current = firestore()
+  .collection("userProfiles")
+  .doc(effectiveUser.uid)
+  .onSnapshot(
+    (docSnap) => {
+      // Avoid TS2774: just check data() instead of exists()
+      const d = docSnap.data() as any | undefined;
+      if (d) {
+        setMyProfile({
+          displayName: d.displayName ?? null,
+          avatarBase64: d.avatarBase64 ?? null,
+        });
+      } else {
+        setMyProfile(null);
+      }
+    },
+    (err) => {
+      console.log("Error listening to my profile:", err);
+    }
+  );
+
           }
         } catch (e) {
           console.log("Error reloading user:", e);
@@ -244,28 +281,25 @@ export default function MapboxScreen() {
 
     return () => {
       unsubscribe();
-      if (myProfileUnsubRef.current) {
+      if (typeof myProfileUnsubRef.current === "function") {
         myProfileUnsubRef.current();
         myProfileUnsubRef.current = null;
       }
     };
   }, []);
 
-  // When a user is logged in and we haven't refreshed yet, reset map state once
+  // One-time map reset per user
   useEffect(() => {
     if (currentUser && !hasRefreshedForUser) {
       console.log("Refreshing map for user:", currentUser.uid);
-
-      // Reset map state; Mapbox.UserLocation will set the new center
       setUserLocation(null);
       setCameraCenter(null);
-      setCameraZoom(5); // or any default zoom you like
-
+      setCameraZoom(5);
       setHasRefreshedForUser(true);
     }
   }, [currentUser?.uid, hasRefreshedForUser]);
 
-  // Subscribe to all user profiles (used for markers)
+  // Subscribe to all user profiles (for markers)
   useEffect(() => {
     const unsub = firestore()
       .collection("userProfiles")
@@ -289,35 +323,40 @@ export default function MapboxScreen() {
     return unsub;
   }, []);
 
-  // Optional: if no user, send back to login
+  // Redirect to login if user is null
   useEffect(() => {
     if (currentUser === null) {
       router.replace("/");
     }
   }, [currentUser, router]);
 
+  // Update avatar source when profile/auth changes
+  useEffect(() => {
+    const source =
+      toImageSource(myProfile?.avatarBase64 ?? null) ||
+      toImageSource(currentUser?.photoURL ?? null);
+    setAvatarSource(source);
+    setAvatarLoading(false);
+  }, [myProfile?.avatarBase64, currentUser?.photoURL]);
+
   const displayName =
     myProfile?.displayName ||
     currentUser?.displayName ||
     (currentUser?.email ? currentUser.email.split("@")[0] : "User");
 
-  // Prefer myProfile avatar; fall back to auth photoURL
-  const avatarSource =
-    toImageSource(myProfile?.avatarBase64) || toImageSource(currentUser?.photoURL);
-
-  // profile menu state
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
 
   // Cleanup comments listener on unmount
   useEffect(() => {
     return () => {
-      if (commentsUnsubRef.current) {
+      if (typeof commentsUnsubRef.current === "function") {
         commentsUnsubRef.current();
+        commentsUnsubRef.current = null;
       }
     };
   }, []);
 
-  // ---------- 1. Ask for location permission once ----------
+  // ---------- Location permission ----------
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -326,12 +365,11 @@ export default function MapboxScreen() {
           "Permission needed",
           "We need your location to pin your thoughts on the map."
         );
-        return;
       }
     })();
   }, []);
 
-  // ---------- 1b. Listen to Mapbox blue dot to get actual coords ----------
+  // Mapbox blue dot -> user location
   const handleUserLocationUpdate = (location: any) => {
     try {
       if (!location?.coords) return;
@@ -344,11 +382,11 @@ export default function MapboxScreen() {
         setCameraZoom(18);
       }
     } catch {
-      // ignore bad updates
+      // ignore
     }
   };
 
-  // ---------- 2. Subscribe to Firestore thoughts ----------
+  // ---------- Thoughts subscription ----------
   useEffect(() => {
     const unsubscribe = firestore()
       .collection("thoughts")
@@ -388,7 +426,7 @@ export default function MapboxScreen() {
     !!selectedThought && !!currentUser && currentUser.uid === selectedThought.userId;
 
   const cleanupCommentsListener = () => {
-    if (commentsUnsubRef.current) {
+    if (typeof commentsUnsubRef.current === "function") {
       commentsUnsubRef.current();
       commentsUnsubRef.current = null;
     }
@@ -406,10 +444,13 @@ export default function MapboxScreen() {
     }
   };
 
-  // ---------- 3. Open modal for NEW thought ----------
+  // ---------- New thought modal ----------
   const openThoughtModal = () => {
     if (!userLocation) {
-      Alert.alert("Location not ready", "Waiting for GPS fix. Try again in a moment.");
+      Alert.alert(
+        "Location not ready",
+        "Waiting for GPS fix. Please log out and Log in again ."
+      );
       return;
     }
     setCameraCenter(userLocation);
@@ -422,7 +463,7 @@ export default function MapboxScreen() {
     setIsModalVisible(true);
   };
 
-  // ---------- 4. When user taps a marker -> view + comments + zoom ----------
+  // ---------- Select thought + comments ----------
   const handleSelectThought = (t: Thought) => {
     setSelectedThought(t);
     setThoughtText(t.text);
@@ -465,7 +506,7 @@ export default function MapboxScreen() {
       );
   };
 
-  // ---------- 5. Save (create or update thought) ----------
+  // ---------- Save thought (create/update) ----------
   const handleSaveThought = async () => {
     if (!thoughtText.trim()) {
       Alert.alert("Empty thought", "Please type something first.");
@@ -486,7 +527,9 @@ export default function MapboxScreen() {
         });
 
         setIsEditing(false);
-        setSelectedThought((prev) => (prev ? { ...prev, text: thoughtText.trim() } : prev));
+        setSelectedThought((prev) =>
+          prev ? { ...prev, text: thoughtText.trim() } : prev
+        );
       } catch (e) {
         console.error("Error updating thought:", e);
         Alert.alert("Error", "Could not update your thought.");
@@ -495,7 +538,10 @@ export default function MapboxScreen() {
     }
 
     if (!userLocation) {
-      Alert.alert("Location not ready", "We couldn't get your location yet.");
+      Alert.alert(
+        "Location not ready",
+        "We couldn't get your location yet."
+      );
       return;
     }
 
@@ -522,7 +568,7 @@ export default function MapboxScreen() {
     }
   };
 
-  // ---------- 6. Delete thought ----------
+  // ---------- Delete thought ----------
   const handleDeleteThought = () => {
     if (!selectedThought) return;
 
@@ -539,7 +585,10 @@ export default function MapboxScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            await firestore().collection("thoughts").doc(selectedThought.id).delete();
+            await firestore()
+              .collection("thoughts")
+              .doc(selectedThought.id)
+              .delete();
 
             setThoughtText("");
             setIsModalVisible(false);
@@ -555,7 +604,7 @@ export default function MapboxScreen() {
     ]);
   };
 
-  // ---------- 7. Add comment ----------
+  // ---------- Add comment ----------
   const handleAddComment = async () => {
     if (!selectedThought) return;
     if (!commentText.trim()) return;
@@ -589,7 +638,7 @@ export default function MapboxScreen() {
     }
   };
 
-  // ---------- 8. Start editing a comment ----------
+  // ---------- Start editing comment ----------
   const handleStartEditComment = (comment: Comment) => {
     const user = auth().currentUser;
     if (!user || user.uid !== comment.userId) return;
@@ -598,7 +647,7 @@ export default function MapboxScreen() {
     setEditingCommentText(comment.text);
   };
 
-  // ---------- 9. Save edited comment ----------
+  // ---------- Save edited comment ----------
   const handleSaveEditedComment = async () => {
     if (!selectedThought || !editingCommentId) return;
     if (!editingCommentText.trim()) {
@@ -631,7 +680,7 @@ export default function MapboxScreen() {
     }
   };
 
-  // ---------- 10. Delete comment ----------
+  // ---------- Delete comment ----------
   const handleDeleteComment = (comment: Comment) => {
     if (!selectedThought) return;
 
@@ -663,7 +712,7 @@ export default function MapboxScreen() {
     ]);
   };
 
-  // ---------- 11. Cancel / close modal ----------
+  // ---------- Cancel modal ----------
   const handleCancel = () => {
     setThoughtText("");
     setIsModalVisible(false);
@@ -673,8 +722,10 @@ export default function MapboxScreen() {
   };
 
   const fallbackCenter = userLocation ?? DEFAULT_CENTER;
-
-  const jitteredThoughts = useMemo(() => jitterThoughtsForRender(thoughts), [thoughts]);
+  const jitteredThoughts = useMemo(
+    () => jitterThoughtsForRender(thoughts),
+    [thoughts]
+  );
 
   // ---------- UI ----------
   return (
@@ -684,15 +735,29 @@ export default function MapboxScreen() {
         <View style={styles.headerRow}>
           <View>
             <Text style={styles.appTitle}>GeoThoughts</Text>
-            <Text style={styles.appSubtitle}>Drop how you feel on the map</Text>
+            <Text style={styles.appSubtitle}>
+              Drop how you feel on the map
+            </Text>
           </View>
 
           <TouchableOpacity
             style={styles.profileButton}
             onPress={() => setIsProfileModalVisible(true)}
           >
-            {avatarSource ? (
-              <Image source={avatarSource} style={styles.profileImage} resizeMode="cover" />
+            {avatarLoading ? (
+              <View style={styles.profilePlaceholder}>
+                <ActivityIndicator size="small" color="#7DE0FF" />
+              </View>
+            ) : avatarSource ? (
+              <Image
+                source={avatarSource}
+                style={styles.profileImage}
+                resizeMode="cover"
+                onError={() => {
+                  console.log("Avatar failed to load");
+                  setAvatarLoading(false);
+                }}
+              />
             ) : (
               <View style={styles.profilePlaceholder}>
                 <Text style={styles.profileInitial}>
@@ -721,9 +786,9 @@ export default function MapboxScreen() {
 
             {jitteredThoughts.map((t) => {
               const profile = t.userId ? userProfiles[t.userId] : undefined;
-
-              // FIXED: robust base64/data-uri support
-              const markerAvatarSource = toImageSource(profile?.avatarBase64);
+              const markerAvatarSource = toImageSource(
+                profile?.avatarBase64 ?? null
+              );
               const markerInitial =
                 (t.userName && t.userName.charAt(0).toUpperCase()) || "?";
 
@@ -753,7 +818,9 @@ export default function MapboxScreen() {
         </View>
 
         {/* Share bar */}
-        <View style={[styles.shareBarWrapper, { paddingBottom: insets.bottom + 4 }]}>
+        <View
+          style={[styles.shareBarWrapper, { paddingBottom: insets.bottom + 4 }]}
+        >
           <TouchableOpacity style={styles.shareBar} onPress={openThoughtModal}>
             <Text style={styles.sharePlus}>＋</Text>
             <Text style={styles.shareText}>Share thought</Text>
@@ -775,7 +842,11 @@ export default function MapboxScreen() {
         >
           <View style={styles.profileModalCard}>
             {avatarSource ? (
-              <Image source={avatarSource} style={styles.profileImageBig} resizeMode="cover" />
+              <Image
+                source={avatarSource}
+                style={styles.profileImageBig}
+                resizeMode="cover"
+              />
             ) : (
               <View style={styles.profilePlaceholderBig}>
                 <Text style={styles.profileInitialBig}>
@@ -784,7 +855,9 @@ export default function MapboxScreen() {
               </View>
             )}
             <Text style={styles.profileName}>{displayName}</Text>
-            {currentUser?.email && <Text style={styles.profileEmail}>{currentUser.email}</Text>}
+            {currentUser?.email && (
+              <Text style={styles.profileEmail}>{currentUser.email}</Text>
+            )}
 
             <TouchableOpacity
               style={styles.profileLogoutButton}
@@ -810,8 +883,12 @@ export default function MapboxScreen() {
           <View style={styles.modalCard}>
             {selectedThought ? (
               <>
-                <Text style={styles.modalTitle}>Thought by {selectedThought.userName}</Text>
-                <Text style={styles.timestampText}>{selectedThought.createdAgo}</Text>
+                <Text style={styles.modalTitle}>
+                  Thought by {selectedThought.userName}
+                </Text>
+                <Text style={styles.timestampText}>
+                  {selectedThought.createdAgo}
+                </Text>
 
                 {isEditing ? (
                   <>
@@ -835,13 +912,19 @@ export default function MapboxScreen() {
                         style={[styles.modalButton, styles.modalSave]}
                         onPress={handleSaveThought}
                       >
-                        <Text style={[styles.modalButtonText, { color: "#fff" }]}>Save</Text>
+                        <Text
+                          style={[styles.modalButtonText, { color: "#fff" }]}
+                        >
+                          Save
+                        </Text>
                       </TouchableOpacity>
                     </View>
                   </>
                 ) : (
                   <>
-                    <Text style={styles.thoughtText}>{selectedThought.text}</Text>
+                    <Text style={styles.thoughtText}>
+                      {selectedThought.text}
+                    </Text>
                     {isOwner && (
                       <View style={styles.ownerActionsRow}>
                         <TouchableOpacity
@@ -854,7 +937,12 @@ export default function MapboxScreen() {
                           style={[styles.modalButton, styles.modalDelete]}
                           onPress={handleDeleteThought}
                         >
-                          <Text style={[styles.modalButtonText, styles.modalDeleteText]}>
+                          <Text
+                            style={[
+                              styles.modalButtonText,
+                              styles.modalDeleteText,
+                            ]}
+                          >
                             Delete
                           </Text>
                         </TouchableOpacity>
@@ -871,15 +959,20 @@ export default function MapboxScreen() {
                     </Text>
                   ) : (
                     comments.map((c) => {
-                      const isMyComment = currentUser && currentUser.uid === c.userId;
+                      const isMyComment =
+                        currentUser && currentUser.uid === c.userId;
                       const isEditingThis = editingCommentId === c.id;
 
                       return (
                         <View key={c.id} style={styles.commentItem}>
                           <View style={styles.commentHeaderRow}>
                             <View>
-                              <Text style={styles.commentAuthor}>{c.userName}</Text>
-                              <Text style={styles.commentTimestamp}>{c.createdAgo}</Text>
+                              <Text style={styles.commentAuthor}>
+                                {c.userName}
+                              </Text>
+                              <Text style={styles.commentTimestamp}>
+                                {c.createdAgo}
+                              </Text>
                             </View>
                             {isMyComment && !isEditingThis && (
                               <View style={styles.commentActionsRow}>
@@ -887,13 +980,20 @@ export default function MapboxScreen() {
                                   style={styles.commentAction}
                                   onPress={() => handleStartEditComment(c)}
                                 >
-                                  <Text style={styles.commentActionText}>Edit</Text>
+                                  <Text style={styles.commentActionText}>
+                                    Edit
+                                  </Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
                                   style={styles.commentAction}
                                   onPress={() => handleDeleteComment(c)}
                                 >
-                                  <Text style={[styles.commentActionText, styles.commentDeleteText]}>
+                                  <Text
+                                    style={[
+                                      styles.commentActionText,
+                                      styles.commentDeleteText,
+                                    ]}
+                                  >
                                     Delete
                                   </Text>
                                 </TouchableOpacity>
@@ -911,19 +1011,32 @@ export default function MapboxScreen() {
                               />
                               <View style={styles.commentEditButtonsRow}>
                                 <TouchableOpacity
-                                  style={[styles.commentEditButton, styles.modalCancel]}
+                                  style={[
+                                    styles.commentEditButton,
+                                    styles.modalCancel,
+                                  ]}
                                   onPress={() => {
                                     setEditingCommentId(null);
                                     setEditingCommentText("");
                                   }}
                                 >
-                                  <Text style={styles.modalButtonText}>Cancel</Text>
+                                  <Text style={styles.modalButtonText}>
+                                    Cancel
+                                  </Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                  style={[styles.commentEditButton, styles.modalSave]}
+                                  style={[
+                                    styles.commentEditButton,
+                                    styles.modalSave,
+                                  ]}
                                   onPress={handleSaveEditedComment}
                                 >
-                                  <Text style={[styles.modalButtonText, { color: "#fff" }]}>
+                                  <Text
+                                    style={[
+                                      styles.modalButtonText,
+                                      { color: "#fff" },
+                                    ]}
+                                  >
                                     Save
                                   </Text>
                                 </TouchableOpacity>
@@ -945,7 +1058,10 @@ export default function MapboxScreen() {
                     value={commentText}
                     onChangeText={setCommentText}
                   />
-                  <TouchableOpacity style={styles.sendButton} onPress={handleAddComment}>
+                  <TouchableOpacity
+                    style={styles.sendButton}
+                    onPress={handleAddComment}
+                  >
                     <Text style={styles.sendButtonText}>Send</Text>
                   </TouchableOpacity>
                 </View>
@@ -962,7 +1078,9 @@ export default function MapboxScreen() {
             ) : (
               <>
                 <Text style={styles.modalTitle}>What is your thought?</Text>
-                <Text style={styles.timestampText}>It will be pinned here.</Text>
+                <Text style={styles.timestampText}>
+                  It will be pinned here.
+                </Text>
                 <TextInput
                   style={styles.modalInput}
                   placeholder="Type something..."
@@ -981,7 +1099,11 @@ export default function MapboxScreen() {
                     style={[styles.modalButton, styles.modalSave]}
                     onPress={handleSaveThought}
                   >
-                    <Text style={[styles.modalButtonText, { color: "#fff" }]}>Save</Text>
+                    <Text
+                      style={[styles.modalButtonText, { color: "#fff" }]}
+                    >
+                      Save
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </>
@@ -994,19 +1116,15 @@ export default function MapboxScreen() {
 }
 
 // ---------- Styles ----------
-const AVATAR_SIZE = 40;
-const AVATAR_SIZE_BIG = 72;
-
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#071A2B", // match login safe background
+    backgroundColor: "#071A2B",
   },
   screen: {
     flex: 1,
     paddingHorizontal: 16,
   },
-
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1017,14 +1135,13 @@ const styles = StyleSheet.create({
   appTitle: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#FFFFFF", // white like login brand
+    color: "#FFFFFF",
   },
   appSubtitle: {
     fontSize: 14,
-    color: "#B1C3D7", // same tone as login tagline
+    color: "#B1C3D7",
     marginTop: 2,
   },
-
   profileButton: {
     width: AVATAR_SIZE,
     height: AVATAR_SIZE,
@@ -1051,9 +1168,8 @@ const styles = StyleSheet.create({
   profileInitial: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#7DE0FF", // accent like login pin
+    color: "#7DE0FF",
   },
-
   profileModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.25)",
@@ -1119,19 +1235,17 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 14,
   },
-
   mapCard: {
     flex: 1,
     borderRadius: 24,
     overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.06)", // match login card style
+    backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
   },
   map: {
     flex: 1,
   },
-
   shareBarWrapper: {
     alignItems: "center",
     paddingTop: 12,
@@ -1139,7 +1253,7 @@ const styles = StyleSheet.create({
   shareBar: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#60D2FF", // login primary button
+    backgroundColor: "#60D2FF",
     paddingHorizontal: 28,
     paddingVertical: 12,
     borderRadius: 999,
@@ -1150,7 +1264,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   sharePlus: {
-    color: "#062033", // same as login button text
+    color: "#062033",
     fontSize: 20,
     marginRight: 8,
   },
@@ -1159,7 +1273,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
   },
-
   marker: {
     width: 32,
     height: 32,
@@ -1180,7 +1293,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#062033",
   },
-
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.4)",
@@ -1224,7 +1336,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     flexWrap: "wrap",
   },
-
   commentsTitle: {
     fontSize: 16,
     fontWeight: "600",
@@ -1271,7 +1382,6 @@ const styles = StyleSheet.create({
     color: "#374151",
     marginTop: 2,
   },
-
   commentEditBlock: {
     marginTop: 4,
   },
@@ -1294,7 +1404,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginLeft: 6,
   },
-
   commentInputRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1320,7 +1429,6 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "500",
   },
-
   modalButtons: {
     flexDirection: "row",
     justifyContent: "flex-end",

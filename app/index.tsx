@@ -33,25 +33,38 @@ export default function Login() {
   }, [email, password, loading]);
 
   const handleLogin = async () => {
-    try {
-      setError("");
-      setLoading(true);
+  try {
+    setError("");
+    setLoading(true);
 
-      const cleanEmail = email.trim().toLowerCase();
-      await auth().signInWithEmailAndPassword(cleanEmail, password);
-
-      setUser({ name: cleanEmail.split("@")[0], email: cleanEmail });
-      router.replace({
-  pathname: "/mapbox",
-  params: { refresh: "2" }, // tell mapbox screen this came from a fresh login
-});
-
-    } catch (e: any) {
-      setError(e?.message ?? "Login failed");
-    } finally {
-      setLoading(false);
+    const cleanEmail = email.trim().toLowerCase();
+    
+    // Sign in
+    await auth().signInWithEmailAndPassword(cleanEmail, password);
+    
+    // CRITICAL: Wait for auth state to fully update
+    const currentUser = auth().currentUser;
+    if (currentUser) {
+      await currentUser.reload();
     }
-  };
+    
+    // Small delay to ensure Firestore listeners are set up
+    await new Promise(resolve => setTimeout(resolve, 300));
+    
+    setUser({ name: cleanEmail.split("@")[0], email: cleanEmail });
+    
+    // Navigate to map
+    router.replace({
+      pathname: "/mapbox",
+      params: { refresh: "2" },
+    });
+
+  } catch (e: any) {
+    setError(e?.message ?? "Login failed");
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <SafeAreaView style={styles.safe}>
