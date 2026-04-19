@@ -1,7 +1,8 @@
-// app/mapbox.tsx
+// app/mapbox.tsx — CitiWatch
 import auth from "@react-native-firebase/auth";
 import firestore from "@react-native-firebase/firestore";
 import Mapbox from "@rnmapbox/maps";
+import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -11,208 +12,98 @@ import {
   Image,
   Modal,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
-Mapbox.setAccessToken(
-  "pk.eyJ1Ijoid29tcHdvbXAtNjkiLCJhIjoiY204emxrOHkwMGJsZjJrcjZtZmN4YXdtNSJ9.LIMPvoBNtGuj4O36r3F72w"
-);
+import {
+  AVATAR_SIZE_BIG,
+  CATEGORY_EMOJI,
+  DEFAULT_CENTER,
+  REPORT_CATEGORIES,
+  STATUS_COLOR,
+} from "../mapscreen/constants";
+import {
+  formatTimeAgo,
+  jitterReportsForRender,
+  toImageSource,
+} from "../mapscreen/helpers";
+import s from "../mapscreen/styles";
+import type {
+  Comment,
+  Report,
+  ReportCategory,
+  UserProfile,
+} from "../mapscreen/types";
+const MAPBOX_TOKEN = "";
 
-// ---------- Helpers ----------
-const formatTimeAgo = (date: Date | null): string => {
-  if (!date) return "just now";
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.max(Math.floor(diffMs / 1000), 0);
+Mapbox.setAccessToken(MAPBOX_TOKEN);
 
-  if (diffSec < 60) return "just now";
-
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return diffMin === 1 ? "1 min ago" : `${diffMin} mins ago`;
-
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return diffHr === 1 ? "1 hr ago" : `${diffHr} hrs ago`;
-
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 7) return diffDay === 1 ? "1 day ago" : `${diffDay} days ago`;
-
-  const diffWeek = Math.floor(diffDay / 7);
-  if (diffWeek < 4)
-    return diffWeek === 1 ? "1 week ago" : `${diffWeek} weeks ago`;
-
-  const diffMonth = Math.floor(diffDay / 30);
-  if (diffMonth < 12)
-    return diffMonth === 1 ? "1 month ago" : `${diffMonth} months ago`;
-
-  const diffYear = Math.floor(diffDay / 365);
-  return diffYear === 1 ? "1 year ago" : `${diffYear} years ago`;
-};
-
-// --- Robust image helpers ---
-function guessMimeFromBase64(b64: string) {
-  if (b64.startsWith("/9j/")) return "image/jpeg"; // JPEG
-  if (b64.startsWith("iVBOR")) return "image/png"; // PNG
-  if (b64.startsWith("R0lG")) return "image/gif"; // GIF
-  return "image/jpeg";
-}
-
-function toImageSource(raw?: string | null) {
-  if (!raw) return null;
-
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  if (trimmed.startsWith("data:image/")) {
-    return { uri: trimmed };
-  }
-
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://") ||
-    trimmed.startsWith("file:")
-  ) {
-    return { uri: trimmed };
-  }
-
-  try {
-    const mime = guessMimeFromBase64(trimmed);
-    return { uri: `data:${mime};base64,${trimmed}` };
-  } catch (error) {
-    console.log("Error creating image source:", error);
-    return null;
-  }
-}
-
-// ---------- Types ----------
-type Thought = {
-  id: string;
-  coord: [number, number]; // [lng, lat]
-  text: string;
-  userId: string | null;
-  userName: string;
-  createdAt: Date | null;
-  createdAgo: string;
-};
-
-type Comment = {
-  id: string;
-  text: string;
-  userId: string | null;
-  userName: string;
-  createdAt: Date | null;
-  createdAgo: string;
-};
-
-type UserProfile = {
-  displayName?: string | null;
-  avatarBase64?: string | null;
-};
-
-type ThoughtWithRenderCoord = Thought & {
-  renderCoord: [number, number];
-};
-
-const DEFAULT_CENTER: [number, number] = [123.8854, 10.3157];
-
-function jitterThoughtsForRender(thoughts: Thought[]): ThoughtWithRenderCoord[] {
-  const groups: Record<string, Thought[]> = {};
-  thoughts.forEach((t) => {
-    const key = `${t.coord[0].toFixed(5)}|${t.coord[1].toFixed(5)}`;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(t);
-  });
-
-  const result: ThoughtWithRenderCoord[] = [];
-
-  Object.values(groups).forEach((group) => {
-    const n = group.length;
-    if (n === 1) {
-      result.push({ ...group[0], renderCoord: group[0].coord });
-      return;
-    }
-
-    const [baseLng, baseLat] = group[0].coord;
-    const radiusMeters = 2;
-
-    const metersPerDegLat = 111_320;
-    const metersPerDegLng = 111_320 * Math.cos((baseLat * Math.PI) / 180);
-
-    group.forEach((t, index) => {
-      const angle = (2 * Math.PI * index) / n;
-      const deltaLat = (Math.sin(angle) * radiusMeters) / metersPerDegLat;
-      const deltaLng = (Math.cos(angle) * radiusMeters) / metersPerDegLng;
-
-      const jittered: [number, number] = [
-        baseLng + deltaLng,
-        baseLat + deltaLat,
-      ];
-
-      result.push({ ...t, renderCoord: jittered });
-    });
-  });
-
-  return result;
-}
-
-const AVATAR_SIZE = 40;
-const AVATAR_SIZE_BIG = 72;
-
+// ── Screen ───────────────────────────────
 export default function MapboxScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { refresh } = useLocalSearchParams<{ refresh?: string }>();
 
   const [mapKey] = useState(() =>
-    refresh === "1" ? `map-login-${Date.now()}` : "map-default"
+    refresh === "1" ? `map-login-${Date.now()}` : "map-default",
   );
 
+  // ── Location ─────────────────────────────
   const [userLocation, setUserLocation] = useState<[number, number] | null>(
-    null
+    null,
   );
-  const [thoughts, setThoughts] = useState<Thought[]>([]);
-  const [isModalVisible, setIsModalVisible] = useState(false);
-  const [thoughtText, setThoughtText] = useState("");
 
-  const [selectedThought, setSelectedThought] = useState<Thought | null>(null);
+  // ── Reports ──────────────────────────────
+  const [reports, setReports] = useState<Report[]>([]);
+  const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+  const [isModalVisible, setIsModalVisible] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
 
+  // ── New / edit form state ─────────────────
+  const [selectedCategory, setSelectedCategory] = useState<ReportCategory>(
+    REPORT_CATEGORIES[0],
+  );
+  const [description, setDescription] = useState("");
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+
+  // ── Comments ─────────────────────────────
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentText, setCommentText] = useState("");
-
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState("");
-
   const commentsUnsubRef = useRef<null | (() => void)>(null);
 
+  // ── Camera ───────────────────────────────
   const [cameraCenter, setCameraCenter] = useState<[number, number] | null>(
-    null
+    null,
   );
   const [cameraZoom, setCameraZoom] = useState<number>(5);
 
+  // ── Auth + Profile ────────────────────────
   const [currentUser, setCurrentUser] = useState(auth().currentUser);
   const [hasRefreshedForUser, setHasRefreshedForUser] = useState(false);
-
   const [myProfile, setMyProfile] = useState<UserProfile | null>(null);
   const myProfileUnsubRef = useRef<null | (() => void)>(null);
-
-  const [userProfiles, setUserProfiles] = useState<
-    Record<string, UserProfile>
-  >({});
-
+  const [userProfiles, setUserProfiles] = useState<Record<string, UserProfile>>(
+    {},
+  );
   const [avatarLoading, setAvatarLoading] = useState(true);
   const [avatarSource, setAvatarSource] = useState<{ uri: string } | null>(
-    null
+    null,
   );
+  const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
 
-  // ---------- Auth + profile subscription ----------
+  // ── Auth + profile subscription ──────────
   useEffect(() => {
     const unsubscribe = auth().onAuthStateChanged(async (user) => {
-      // cleanup old profile listener if any
       if (typeof myProfileUnsubRef.current === "function") {
         myProfileUnsubRef.current();
         myProfileUnsubRef.current = null;
@@ -227,48 +118,36 @@ export default function MapboxScreen() {
           setCurrentUser(effectiveUser);
 
           if (effectiveUser?.uid) {
-            // initial fetch
             try {
-             const profileDoc = await firestore()
-  .collection("userProfiles")
-  .doc(effectiveUser.uid)
-  .get();
-
-// Use data() instead of exists to avoid TS2774
-const d = profileDoc.data() as any | undefined;
-if (d) {
-  setMyProfile({
-    displayName: d.displayName ?? null,
-    avatarBase64: d.avatarBase64 ?? null,
-  });
-}
-
-            } catch (fetchErr) {
-              console.log("Error fetching initial profile:", fetchErr);
+              const profileDoc = await firestore()
+                .collection("userProfiles")
+                .doc(effectiveUser.uid)
+                .get();
+              const d = profileDoc.data() as any | undefined;
+              if (d)
+                setMyProfile({
+                  displayName: d.displayName ?? null,
+                  avatarBase64: d.avatarBase64 ?? null,
+                });
+            } catch (err) {
+              console.log("Error fetching initial profile:", err);
             }
 
-            // realtime listener
-           myProfileUnsubRef.current = firestore()
-  .collection("userProfiles")
-  .doc(effectiveUser.uid)
-  .onSnapshot(
-    (docSnap) => {
-      // Avoid TS2774: just check data() instead of exists()
-      const d = docSnap.data() as any | undefined;
-      if (d) {
-        setMyProfile({
-          displayName: d.displayName ?? null,
-          avatarBase64: d.avatarBase64 ?? null,
-        });
-      } else {
-        setMyProfile(null);
-      }
-    },
-    (err) => {
-      console.log("Error listening to my profile:", err);
-    }
-  );
-
+            myProfileUnsubRef.current = firestore()
+              .collection("userProfiles")
+              .doc(effectiveUser.uid)
+              .onSnapshot(
+                (docSnap) => {
+                  const d = docSnap.data() as any | undefined;
+                  if (d)
+                    setMyProfile({
+                      displayName: d.displayName ?? null,
+                      avatarBase64: d.avatarBase64 ?? null,
+                    });
+                  else setMyProfile(null);
+                },
+                (err) => console.log("Error listening to my profile:", err),
+              );
           }
         } catch (e) {
           console.log("Error reloading user:", e);
@@ -291,7 +170,6 @@ if (d) {
   // One-time map reset per user
   useEffect(() => {
     if (currentUser && !hasRefreshedForUser) {
-      console.log("Refreshing map for user:", currentUser.uid);
       setUserLocation(null);
       setCameraCenter(null);
       setCameraZoom(5);
@@ -299,7 +177,7 @@ if (d) {
     }
   }, [currentUser?.uid, hasRefreshedForUser]);
 
-  // Subscribe to all user profiles (for markers)
+  // All user profiles (for markers)
   useEffect(() => {
     const unsub = firestore()
       .collection("userProfiles")
@@ -315,22 +193,17 @@ if (d) {
           });
           setUserProfiles(map);
         },
-        (err) => {
-          console.log("Error loading user profiles:", err);
-        }
+        (err) => console.log("Error loading user profiles:", err),
       );
-
     return unsub;
   }, []);
 
-  // Redirect to login if user is null
+  // Redirect if signed out
   useEffect(() => {
-    if (currentUser === null) {
-      router.replace("/");
-    }
+    if (currentUser === null) router.replace("/");
   }, [currentUser, router]);
 
-  // Update avatar source when profile/auth changes
+  // Avatar source
   useEffect(() => {
     const source =
       toImageSource(myProfile?.avatarBase64 ?? null) ||
@@ -339,14 +212,7 @@ if (d) {
     setAvatarLoading(false);
   }, [myProfile?.avatarBase64, currentUser?.photoURL]);
 
-  const displayName =
-    myProfile?.displayName ||
-    currentUser?.displayName ||
-    (currentUser?.email ? currentUser.email.split("@")[0] : "User");
-
-  const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
-
-  // Cleanup comments listener on unmount
+  // Cleanup comments on unmount
   useEffect(() => {
     return () => {
       if (typeof commentsUnsubRef.current === "function") {
@@ -356,74 +222,80 @@ if (d) {
     };
   }, []);
 
-  // ---------- Location permission ----------
+  // Location permission
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         Alert.alert(
           "Permission needed",
-          "We need your location to pin your thoughts on the map."
+          "We need your location to pin reports on the map.",
         );
       }
     })();
   }, []);
 
-  // Mapbox blue dot -> user location
-  const handleUserLocationUpdate = (location: any) => {
-    try {
-      if (!location?.coords) return;
-      const { longitude, latitude } = location.coords;
-      const coord: [number, number] = [longitude, latitude];
-
-      if (!userLocation) {
-        setUserLocation(coord);
-        setCameraCenter(coord);
-        setCameraZoom(18);
-      }
-    } catch {
-      // ignore
-    }
-  };
-
-  // ---------- Thoughts subscription ----------
+  // Reports subscription
   useEffect(() => {
     const unsubscribe = firestore()
-      .collection("thoughts")
+      .collection("reports")
       .orderBy("createdAt", "desc")
       .onSnapshot(
         (snapshot) => {
           const data = snapshot.docs
-            .map<Thought | null>((docSnap) => {
+            .map<Report | null>((docSnap) => {
               const d = docSnap.data() as any;
-              if (d.lng == null || d.lat == null || !d.text) return null;
-
+              if (d.lng == null || d.lat == null || !d.description) return null;
               const createdAt: Date | null = d.createdAt?.toDate?.() ?? null;
 
               return {
                 id: docSnap.id,
                 coord: [d.lng as number, d.lat as number],
-                text: String(d.text),
+                description: String(d.description),
+                category: (d.category ??
+                  REPORT_CATEGORIES[0]) as ReportCategory,
+                status: (d.status ?? "pending") as "pending" | "resolved",
+                imageBase64: (d.imageBase64 ?? null) as string | null,
                 userId: (d.userId ?? null) as string | null,
                 userName: (d.userName ?? "Unknown user") as string,
                 createdAt,
                 createdAgo: formatTimeAgo(createdAt),
               };
             })
-            .filter((t): t is Thought => t !== null);
+            .filter((r): r is Report => r !== null);
 
-          setThoughts(data);
+          setReports(data);
         },
-        (err) => {
-          console.error("Error loading thoughts:", err);
-        }
+        (err) => console.error("Error loading reports:", err),
       );
 
     return () => unsubscribe();
   }, []);
 
+  // ── Derived values ────────────────────────
+  const displayName =
+    myProfile?.displayName ||
+    currentUser?.displayName ||
+    (currentUser?.email ? currentUser.email.split("@")[0] : "User");
+
   const isOwner =
-    !!selectedThought && !!currentUser && currentUser.uid === selectedThought.userId;
+    !!selectedReport &&
+    !!currentUser &&
+    currentUser.uid === selectedReport.userId;
+
+  const fallbackCenter = userLocation ?? DEFAULT_CENTER;
+  const jitteredReports = useMemo(
+    () => jitterReportsForRender(reports),
+    [reports],
+  );
+
+  // ── Helpers ───────────────────────────────
+  const resetForm = () => {
+    setDescription("");
+    setSelectedCategory(REPORT_CATEGORIES[0]);
+    setImageUri(null);
+    setImageBase64(null);
+  };
 
   const cleanupCommentsListener = () => {
     if (typeof commentsUnsubRef.current === "function") {
@@ -436,6 +308,7 @@ if (d) {
     setEditingCommentText("");
   };
 
+  // ── Handlers ─────────────────────────────
   const handleLogout = async () => {
     try {
       await auth().signOut();
@@ -444,39 +317,80 @@ if (d) {
     }
   };
 
-  // ---------- New thought modal ----------
-  const openThoughtModal = () => {
+  const handleUserLocationUpdate = (location: any) => {
+    try {
+      if (!location?.coords) return;
+      const { longitude, latitude } = location.coords;
+      const coord: [number, number] = [longitude, latitude];
+      if (!userLocation) {
+        setUserLocation(coord);
+        setCameraCenter(coord);
+        setCameraZoom(18);
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Pick image for report
+  const handlePickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission required", "We need access to your photos.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.5,
+      base64: true,
+    });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      setImageUri(asset.uri);
+      const mime = asset.mimeType ?? "image/jpeg";
+      const dataUri = asset.base64
+        ? `data:${mime};base64,${asset.base64}`
+        : null;
+      setImageBase64(dataUri);
+    }
+  };
+
+  // Open new report modal
+  const openReportModal = () => {
     if (!userLocation) {
       Alert.alert(
         "Location not ready",
-        "Waiting for GPS fix. Please log out and Log in again ."
+        "Waiting for GPS fix. Please log out and log in again.",
       );
       return;
     }
     setCameraCenter(userLocation);
     setCameraZoom(19);
-
     cleanupCommentsListener();
-    setSelectedThought(null);
+    setSelectedReport(null);
     setIsEditing(false);
-    setThoughtText("");
+    resetForm();
     setIsModalVisible(true);
   };
 
-  // ---------- Select thought + comments ----------
-  const handleSelectThought = (t: Thought) => {
-    setSelectedThought(t);
-    setThoughtText(t.text);
+  // Select a report on map
+  const handleSelectReport = (r: Report) => {
+    setSelectedReport(r);
+    setDescription(r.description);
+    setSelectedCategory(r.category);
+    setImageUri(toImageSource(r.imageBase64)?.uri ?? null);
+    setImageBase64(r.imageBase64);
     setIsEditing(false);
     setIsModalVisible(true);
-
-    setCameraCenter(t.coord);
+    setCameraCenter(r.coord);
     setCameraZoom(19);
 
     cleanupCommentsListener();
     commentsUnsubRef.current = firestore()
-      .collection("thoughts")
-      .doc(t.id)
+      .collection("reports")
+      .doc(r.id)
       .collection("comments")
       .orderBy("createdAt", "asc")
       .onSnapshot(
@@ -485,9 +399,7 @@ if (d) {
             .map<Comment | null>((docSnap) => {
               const d = docSnap.data() as any;
               if (!d.text) return null;
-
               const createdAt: Date | null = d.createdAt?.toDate?.() ?? null;
-
               return {
                 id: docSnap.id,
                 text: String(d.text),
@@ -500,16 +412,18 @@ if (d) {
             .filter((c): c is Comment => c !== null);
           setComments(data);
         },
-        (err) => {
-          console.error("Error loading comments:", err);
-        }
+        (err) => console.error("Error loading comments:", err),
       );
   };
 
-  // ---------- Save thought (create/update) ----------
-  const handleSaveThought = async () => {
-    if (!thoughtText.trim()) {
-      Alert.alert("Empty thought", "Please type something first.");
+  // Save new report
+  const handleSaveReport = async () => {
+    if (!description.trim()) {
+      Alert.alert("Missing description", "Please describe the issue.");
+      return;
+    }
+    if (!imageBase64) {
+      Alert.alert("Photo required", "Please attach a photo of the issue.");
       return;
     }
 
@@ -519,110 +433,112 @@ if (d) {
       return;
     }
 
-    if (isEditing && selectedThought) {
+    if (isEditing && selectedReport) {
       try {
-        await firestore().collection("thoughts").doc(selectedThought.id).update({
-          text: thoughtText.trim(),
+        await firestore().collection("reports").doc(selectedReport.id).update({
+          description: description.trim(),
+          category: selectedCategory,
+          imageBase64: imageBase64,
           updatedAt: firestore.FieldValue.serverTimestamp(),
         });
-
         setIsEditing(false);
-        setSelectedThought((prev) =>
-          prev ? { ...prev, text: thoughtText.trim() } : prev
+        setSelectedReport((prev) =>
+          prev
+            ? {
+                ...prev,
+                description: description.trim(),
+                category: selectedCategory,
+                imageBase64,
+              }
+            : prev,
         );
       } catch (e) {
-        console.error("Error updating thought:", e);
-        Alert.alert("Error", "Could not update your thought.");
+        console.error("Error updating report:", e);
+        Alert.alert("Error", "Could not update your report.");
       }
       return;
     }
 
     if (!userLocation) {
-      Alert.alert(
-        "Location not ready",
-        "We couldn't get your location yet."
-      );
+      Alert.alert("Location not ready", "We couldn't get your location yet.");
       return;
     }
 
     const [lng, lat] = userLocation;
-    const email = user.email ?? "unknown@example.com";
-    const derivedName = email.split("@")[0];
-    const userName = user.displayName || derivedName;
+    const userName =
+      user.displayName || (user.email ?? "unknown").split("@")[0];
 
     try {
-      await firestore().collection("thoughts").add({
-        text: thoughtText.trim(),
+      await firestore().collection("reports").add({
+        description: description.trim(),
+        category: selectedCategory,
+        status: "pending",
+        imageBase64: imageBase64,
         lng,
         lat,
         userId: user.uid,
         userName,
         createdAt: firestore.FieldValue.serverTimestamp(),
       });
-
-      setThoughtText("");
+      resetForm();
       setIsModalVisible(false);
     } catch (e) {
-      console.error("Error saving thought:", e);
-      Alert.alert("Error", "Could not save your thought. Please try again.");
+      console.error("Error saving report:", e);
+      Alert.alert("Error", "Could not save your report. Please try again.");
     }
   };
 
-  // ---------- Delete thought ----------
-  const handleDeleteThought = () => {
-    if (!selectedThought) return;
-
+  // Delete report
+  const handleDeleteReport = () => {
+    if (!selectedReport) return;
     const user = auth().currentUser;
-    if (!user || user.uid !== selectedThought.userId) {
-      Alert.alert("Not allowed", "You can only delete your own thoughts.");
+    if (!user || user.uid !== selectedReport.userId) {
+      Alert.alert("Not allowed", "You can only delete your own reports.");
       return;
     }
-
-    Alert.alert("Delete thought", "Are you sure you want to delete this?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            await firestore()
-              .collection("thoughts")
-              .doc(selectedThought.id)
-              .delete();
-
-            setThoughtText("");
-            setIsModalVisible(false);
-            setIsEditing(false);
-            setSelectedThought(null);
-            cleanupCommentsListener();
-          } catch (e) {
-            console.error("Error deleting thought:", e);
-            Alert.alert("Error", "Could not delete your thought.");
-          }
+    Alert.alert(
+      "Delete report",
+      "Are you sure you want to delete this report?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await firestore()
+                .collection("reports")
+                .doc(selectedReport.id)
+                .delete();
+              setIsModalVisible(false);
+              setIsEditing(false);
+              setSelectedReport(null);
+              resetForm();
+              cleanupCommentsListener();
+            } catch (e) {
+              console.error("Error deleting report:", e);
+              Alert.alert("Error", "Could not delete your report.");
+            }
+          },
         },
-      },
-    ]);
+      ],
+    );
   };
 
-  // ---------- Add comment ----------
+  // Add comment
   const handleAddComment = async () => {
-    if (!selectedThought) return;
-    if (!commentText.trim()) return;
-
+    if (!selectedReport || !commentText.trim()) return;
     const user = auth().currentUser;
     if (!user) {
       Alert.alert("Not logged in", "Please log in again.");
       return;
     }
-
-    const email = user.email ?? "unknown@example.com";
-    const derivedName = email.split("@")[0];
-    const userName = user.displayName || derivedName;
-
+    const userName =
+      user.displayName || (user.email ?? "unknown").split("@")[0];
     try {
       await firestore()
-        .collection("thoughts")
-        .doc(selectedThought.id)
+        .collection("reports")
+        .doc(selectedReport.id)
         .collection("comments")
         .add({
           text: commentText.trim(),
@@ -630,7 +546,6 @@ if (d) {
           userName,
           createdAt: firestore.FieldValue.serverTimestamp(),
         });
-
       setCommentText("");
     } catch (e) {
       console.error("Error adding comment:", e);
@@ -638,40 +553,34 @@ if (d) {
     }
   };
 
-  // ---------- Start editing comment ----------
   const handleStartEditComment = (comment: Comment) => {
     const user = auth().currentUser;
     if (!user || user.uid !== comment.userId) return;
-
     setEditingCommentId(comment.id);
     setEditingCommentText(comment.text);
   };
 
-  // ---------- Save edited comment ----------
   const handleSaveEditedComment = async () => {
-    if (!selectedThought || !editingCommentId) return;
+    if (!selectedReport || !editingCommentId) return;
     if (!editingCommentText.trim()) {
       Alert.alert("Empty comment", "Please type something first.");
       return;
     }
-
     const user = auth().currentUser;
     if (!user) {
       Alert.alert("Not logged in", "Please log in again.");
       return;
     }
-
     try {
       await firestore()
-        .collection("thoughts")
-        .doc(selectedThought.id)
+        .collection("reports")
+        .doc(selectedReport.id)
         .collection("comments")
         .doc(editingCommentId)
         .update({
           text: editingCommentText.trim(),
           updatedAt: firestore.FieldValue.serverTimestamp(),
         });
-
       setEditingCommentId(null);
       setEditingCommentText("");
     } catch (e) {
@@ -680,17 +589,14 @@ if (d) {
     }
   };
 
-  // ---------- Delete comment ----------
   const handleDeleteComment = (comment: Comment) => {
-    if (!selectedThought) return;
-
+    if (!selectedReport) return;
     const user = auth().currentUser;
     if (!user || user.uid !== comment.userId) {
       Alert.alert("Not allowed", "You can only delete your own comments.");
       return;
     }
-
-    Alert.alert("Delete comment", "Are you sure you want to delete this?", [
+    Alert.alert("Delete comment", "Are you sure?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
@@ -698,8 +604,8 @@ if (d) {
         onPress: async () => {
           try {
             await firestore()
-              .collection("thoughts")
-              .doc(selectedThought.id)
+              .collection("reports")
+              .doc(selectedReport.id)
               .collection("comments")
               .doc(comment.id)
               .delete();
@@ -712,55 +618,44 @@ if (d) {
     ]);
   };
 
-  // ---------- Cancel modal ----------
   const handleCancel = () => {
-    setThoughtText("");
     setIsModalVisible(false);
     setIsEditing(false);
-    setSelectedThought(null);
+    setSelectedReport(null);
+    resetForm();
     cleanupCommentsListener();
   };
 
-  const fallbackCenter = userLocation ?? DEFAULT_CENTER;
-  const jitteredThoughts = useMemo(
-    () => jitterThoughtsForRender(thoughts),
-    [thoughts]
-  );
-
-  // ---------- UI ----------
+  // ── JSX ──────────────────────────────────
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.screen}>
+    <SafeAreaView style={s.safeArea}>
+      <View style={s.screen}>
         {/* Header */}
-        <View style={styles.headerRow}>
+        <View style={s.headerRow}>
           <View>
-            <Text style={styles.appTitle}>GeoThoughts</Text>
-            <Text style={styles.appSubtitle}>
-              Drop how you feel on the map
+            <Text style={s.appTitle}>
+              CITI<Text style={s.appAccent}>WATCH</Text>
             </Text>
+            <Text style={s.appSubtitle}>Pin civic issues on the map</Text>
           </View>
-
           <TouchableOpacity
-            style={styles.profileButton}
+            style={s.profileButton}
             onPress={() => setIsProfileModalVisible(true)}
           >
             {avatarLoading ? (
-              <View style={styles.profilePlaceholder}>
-                <ActivityIndicator size="small" color="#7DE0FF" />
+              <View style={s.profilePlaceholder}>
+                <ActivityIndicator size="small" color="#1A6BF5" />
               </View>
             ) : avatarSource ? (
               <Image
                 source={avatarSource}
-                style={styles.profileImage}
+                style={s.profileImage}
                 resizeMode="cover"
-                onError={() => {
-                  console.log("Avatar failed to load");
-                  setAvatarLoading(false);
-                }}
+                onError={() => setAvatarLoading(false)}
               />
             ) : (
-              <View style={styles.profilePlaceholder}>
-                <Text style={styles.profileInitial}>
+              <View style={s.profilePlaceholder}>
+                <Text style={s.profileInitial}>
                   {displayName.charAt(0).toUpperCase()}
                 </Text>
               </View>
@@ -768,11 +663,11 @@ if (d) {
           </TouchableOpacity>
         </View>
 
-        {/* Map card */}
-        <View style={styles.mapCard}>
+        {/* Map */}
+        <View style={s.mapCard}>
           <Mapbox.MapView
             key={mapKey}
-            style={styles.map}
+            style={s.map}
             styleURL={Mapbox.StyleURL.Street}
           >
             <Mapbox.Camera
@@ -781,54 +676,36 @@ if (d) {
               animationMode="flyTo"
               animationDuration={1000}
             />
-
             <Mapbox.UserLocation visible onUpdate={handleUserLocationUpdate} />
 
-            {jitteredThoughts.map((t) => {
-              const profile = t.userId ? userProfiles[t.userId] : undefined;
-              const markerAvatarSource = toImageSource(
-                profile?.avatarBase64 ?? null
-              );
-              const markerInitial =
-                (t.userName && t.userName.charAt(0).toUpperCase()) || "?";
-
-              return (
-                <Mapbox.PointAnnotation
-                  key={t.id}
-                  id={t.id}
-                  coordinate={t.renderCoord}
-                  onSelected={() => handleSelectThought(t)}
-                >
-                  <View style={styles.marker}>
-                    {markerAvatarSource ? (
-                      <Image
-                        source={markerAvatarSource}
-                        style={styles.markerImage}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <Text style={styles.markerInitial}>{markerInitial}</Text>
-                    )}
-                  </View>
-                  <Mapbox.Callout title={`${t.userName}: ${t.text}`} />
-                </Mapbox.PointAnnotation>
-              );
-            })}
+            {jitteredReports.map((r) => (
+              <Mapbox.PointAnnotation
+                key={r.id}
+                id={r.id}
+                coordinate={r.renderCoord}
+                onSelected={() => handleSelectReport(r)}
+              >
+                <View style={s.marker}>
+                  <Text style={s.markerEmoji}>
+                    {CATEGORY_EMOJI[r.category]}
+                  </Text>
+                </View>
+                <Mapbox.Callout title={`${r.category} — ${r.userName}`} />
+              </Mapbox.PointAnnotation>
+            ))}
           </Mapbox.MapView>
         </View>
 
-        {/* Share bar */}
-        <View
-          style={[styles.shareBarWrapper, { paddingBottom: insets.bottom + 4 }]}
-        >
-          <TouchableOpacity style={styles.shareBar} onPress={openThoughtModal}>
-            <Text style={styles.sharePlus}>＋</Text>
-            <Text style={styles.shareText}>Share thought</Text>
+        {/* FAB */}
+        <View style={[s.shareBarWrapper, { paddingBottom: insets.bottom + 4 }]}>
+          <TouchableOpacity style={s.shareBar} onPress={openReportModal}>
+            <Text style={s.sharePlus}>＋</Text>
+            <Text style={s.shareText}>File a Report</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Profile modal */}
+      {/* ── Profile Modal ── */}
       <Modal
         visible={isProfileModalVisible}
         transparent
@@ -836,162 +713,145 @@ if (d) {
         onRequestClose={() => setIsProfileModalVisible(false)}
       >
         <TouchableOpacity
-          style={styles.profileModalOverlay}
+          style={s.profileModalOverlay}
           activeOpacity={1}
           onPressOut={() => setIsProfileModalVisible(false)}
         >
-          <View style={styles.profileModalCard}>
+          <View style={s.profileModalCard}>
             {avatarSource ? (
               <Image
                 source={avatarSource}
-                style={styles.profileImageBig}
+                style={s.profileImageBig}
                 resizeMode="cover"
               />
             ) : (
-              <View style={styles.profilePlaceholderBig}>
-                <Text style={styles.profileInitialBig}>
+              <View
+                style={[
+                  s.profilePlaceholderBig,
+                  { width: AVATAR_SIZE_BIG, height: AVATAR_SIZE_BIG },
+                ]}
+              >
+                <Text style={s.profileInitialBig}>
                   {displayName.charAt(0).toUpperCase()}
                 </Text>
               </View>
             )}
-            <Text style={styles.profileName}>{displayName}</Text>
+            <Text style={s.profileName}>{displayName}</Text>
             {currentUser?.email && (
-              <Text style={styles.profileEmail}>{currentUser.email}</Text>
+              <Text style={s.profileEmail}>{currentUser.email}</Text>
             )}
-
             <TouchableOpacity
-              style={styles.profileLogoutButton}
+              style={s.profileLogoutButton}
               onPress={() => {
                 setIsProfileModalVisible(false);
                 handleLogout();
               }}
             >
-              <Text style={styles.profileLogoutText}>Logout</Text>
+              <Text style={s.profileLogoutText}>Logout</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
 
-      {/* Thought modal */}
+      {/* ── Report Modal ── */}
       <Modal
         visible={isModalVisible}
         transparent
         animationType="slide"
         onRequestClose={handleCancel}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            {selectedThought ? (
-              <>
-                <Text style={styles.modalTitle}>
-                  Thought by {selectedThought.userName}
-                </Text>
-                <Text style={styles.timestampText}>
-                  {selectedThought.createdAgo}
-                </Text>
+        <View style={s.modalOverlay}>
+          <View style={s.modalCard}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* ── VIEW existing report ── */}
+              {selectedReport && !isEditing ? (
+                <>
+                  <Text style={s.modalTitle}>{selectedReport.category}</Text>
+                  <Text style={s.timestampText}>
+                    By {selectedReport.userName} · {selectedReport.createdAgo}
+                  </Text>
 
-                {isEditing ? (
-                  <>
-                    <TextInput
-                      style={styles.modalInput}
-                      value={thoughtText}
-                      onChangeText={setThoughtText}
-                      multiline
+                  {/* Status badge */}
+                  <View
+                    style={[
+                      s.statusBadge,
+                      { backgroundColor: STATUS_COLOR[selectedReport.status] },
+                    ]}
+                  >
+                    <Text style={s.statusBadgeText}>
+                      {selectedReport.status === "resolved"
+                        ? "✓ Resolved"
+                        : "⏳ Pending"}
+                    </Text>
+                  </View>
+
+                  {/* Photo */}
+                  {selectedReport.imageBase64 && (
+                    <Image
+                      source={toImageSource(selectedReport.imageBase64)!}
+                      style={s.reportImageFull}
+                      resizeMode="cover"
                     />
-                    <View style={styles.ownerActionsRow}>
+                  )}
+
+                  <Text style={s.reportCategory}>
+                    {selectedReport.category}
+                  </Text>
+                  <Text style={s.reportDescription}>
+                    {selectedReport.description}
+                  </Text>
+
+                  {isOwner && (
+                    <View style={s.ownerActionsRow}>
                       <TouchableOpacity
-                        style={[styles.modalButton, styles.modalCancel]}
-                        onPress={() => {
-                          setIsEditing(false);
-                          setThoughtText(selectedThought.text);
-                        }}
+                        style={[s.modalButton, s.modalCancel]}
+                        onPress={() => setIsEditing(true)}
                       >
-                        <Text style={styles.modalButtonText}>Cancel edit</Text>
+                        <Text style={s.modalButtonText}>Edit</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
-                        style={[styles.modalButton, styles.modalSave]}
-                        onPress={handleSaveThought}
+                        style={[s.modalButton, s.modalDelete]}
+                        onPress={handleDeleteReport}
                       >
-                        <Text
-                          style={[styles.modalButtonText, { color: "#fff" }]}
-                        >
-                          Save
-                        </Text>
+                        <Text style={s.modalDeleteText}>Delete</Text>
                       </TouchableOpacity>
                     </View>
-                  </>
-                ) : (
-                  <>
-                    <Text style={styles.thoughtText}>
-                      {selectedThought.text}
-                    </Text>
-                    {isOwner && (
-                      <View style={styles.ownerActionsRow}>
-                        <TouchableOpacity
-                          style={[styles.modalButton, styles.modalCancel]}
-                          onPress={() => setIsEditing(true)}
-                        >
-                          <Text style={styles.modalButtonText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.modalButton, styles.modalDelete]}
-                          onPress={handleDeleteThought}
-                        >
-                          <Text
-                            style={[
-                              styles.modalButtonText,
-                              styles.modalDeleteText,
-                            ]}
-                          >
-                            Delete
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </>
-                )}
+                  )}
 
-                <Text style={styles.commentsTitle}>Comments</Text>
-                <ScrollView style={styles.commentsList}>
+                  {/* Comments */}
+                  <Text style={s.commentsTitle}>Comments</Text>
                   {comments.length === 0 ? (
-                    <Text style={styles.noCommentsText}>
-                      No comments yet. Be the first to comment!
+                    <Text style={s.noCommentsText}>
+                      No comments yet. Be the first!
                     </Text>
                   ) : (
                     comments.map((c) => {
                       const isMyComment =
                         currentUser && currentUser.uid === c.userId;
                       const isEditingThis = editingCommentId === c.id;
-
                       return (
-                        <View key={c.id} style={styles.commentItem}>
-                          <View style={styles.commentHeaderRow}>
+                        <View key={c.id} style={s.commentItem}>
+                          <View style={s.commentHeaderRow}>
                             <View>
-                              <Text style={styles.commentAuthor}>
-                                {c.userName}
-                              </Text>
-                              <Text style={styles.commentTimestamp}>
+                              <Text style={s.commentAuthor}>{c.userName}</Text>
+                              <Text style={s.commentTimestamp}>
                                 {c.createdAgo}
                               </Text>
                             </View>
                             {isMyComment && !isEditingThis && (
-                              <View style={styles.commentActionsRow}>
+                              <View style={s.commentActionsRow}>
                                 <TouchableOpacity
-                                  style={styles.commentAction}
                                   onPress={() => handleStartEditComment(c)}
                                 >
-                                  <Text style={styles.commentActionText}>
-                                    Edit
-                                  </Text>
+                                  <Text style={s.commentActionText}>Edit</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                  style={styles.commentAction}
                                   onPress={() => handleDeleteComment(c)}
                                 >
                                   <Text
                                     style={[
-                                      styles.commentActionText,
-                                      styles.commentDeleteText,
+                                      s.commentActionText,
+                                      s.commentDeleteText,
                                     ]}
                                   >
                                     Delete
@@ -1000,463 +860,165 @@ if (d) {
                               </View>
                             )}
                           </View>
-
                           {isEditingThis ? (
-                            <View style={styles.commentEditBlock}>
+                            <View style={s.commentEditBlock}>
                               <TextInput
-                                style={styles.commentEditInput}
+                                style={s.commentEditInput}
                                 value={editingCommentText}
                                 onChangeText={setEditingCommentText}
                                 multiline
                               />
-                              <View style={styles.commentEditButtonsRow}>
+                              <View style={s.commentEditButtonsRow}>
                                 <TouchableOpacity
-                                  style={[
-                                    styles.commentEditButton,
-                                    styles.modalCancel,
-                                  ]}
+                                  style={[s.commentEditButton, s.modalCancel]}
                                   onPress={() => {
                                     setEditingCommentId(null);
                                     setEditingCommentText("");
                                   }}
                                 >
-                                  <Text style={styles.modalButtonText}>
-                                    Cancel
-                                  </Text>
+                                  <Text style={s.modalButtonText}>Cancel</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                  style={[
-                                    styles.commentEditButton,
-                                    styles.modalSave,
-                                  ]}
+                                  style={[s.commentEditButton, s.modalSave]}
                                   onPress={handleSaveEditedComment}
                                 >
-                                  <Text
-                                    style={[
-                                      styles.modalButtonText,
-                                      { color: "#fff" },
-                                    ]}
-                                  >
-                                    Save
-                                  </Text>
+                                  <Text style={s.modalSaveText}>Save</Text>
                                 </TouchableOpacity>
                               </View>
                             </View>
                           ) : (
-                            <Text style={styles.commentText}>{c.text}</Text>
+                            <Text style={s.commentText}>{c.text}</Text>
                           )}
                         </View>
                       );
                     })
                   )}
-                </ScrollView>
 
-                <View style={styles.commentInputRow}>
-                  <TextInput
-                    style={styles.commentInput}
-                    placeholder="Write a comment..."
-                    value={commentText}
-                    onChangeText={setCommentText}
-                  />
-                  <TouchableOpacity
-                    style={styles.sendButton}
-                    onPress={handleAddComment}
-                  >
-                    <Text style={styles.sendButtonText}>Send</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={[styles.modalButtons, { marginTop: 16 }]}>
-                  <TouchableOpacity
-                    style={[styles.modalButton, styles.modalCancel]}
-                    onPress={handleCancel}
-                  >
-                    <Text style={styles.modalButtonText}>Close</Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            ) : (
-              <>
-                <Text style={styles.modalTitle}>What is your thought?</Text>
-                <Text style={styles.timestampText}>
-                  It will be pinned here.
-                </Text>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Type something..."
-                  value={thoughtText}
-                  onChangeText={setThoughtText}
-                  multiline
-                />
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity
-                    style={[styles.modalButton, styles.modalCancel]}
-                    onPress={handleCancel}
-                  >
-                    <Text style={styles.modalButtonText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalButton, styles.modalSave]}
-                    onPress={handleSaveThought}
-                  >
-                    <Text
-                      style={[styles.modalButtonText, { color: "#fff" }]}
+                  <View style={s.commentInputRow}>
+                    <TextInput
+                      style={s.commentInput}
+                      placeholder="Write a comment..."
+                      placeholderTextColor="#A0AECB"
+                      value={commentText}
+                      onChangeText={setCommentText}
+                    />
+                    <TouchableOpacity
+                      style={s.sendButton}
+                      onPress={handleAddComment}
                     >
-                      Save
-                    </Text>
+                      <Text style={s.sendButtonText}>Send</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={[s.modalButtons, { marginTop: 16 }]}>
+                    <TouchableOpacity
+                      style={[s.modalButton, s.modalCancel]}
+                      onPress={handleCancel}
+                    >
+                      <Text style={s.modalButtonText}>Close</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                /* ── CREATE / EDIT report form ── */
+                <>
+                  <Text style={s.modalTitle}>
+                    {isEditing ? "Edit Report" : "File a Report"}
+                  </Text>
+                  <Text style={s.timestampText}>
+                    {isEditing
+                      ? "Update the details below."
+                      : "Your location will be pinned automatically."}
+                  </Text>
+
+                  {/* Category picker */}
+                  <Text style={s.categoryLabel}>CATEGORY</Text>
+                  <View style={s.categoryGrid}>
+                    {REPORT_CATEGORIES.map((cat) => (
+                      <TouchableOpacity
+                        key={cat}
+                        style={[
+                          s.categoryChip,
+                          selectedCategory === cat && s.categoryChipActive,
+                        ]}
+                        onPress={() => setSelectedCategory(cat)}
+                      >
+                        <Text>{CATEGORY_EMOJI[cat]}</Text>
+                        <Text
+                          style={[
+                            s.categoryChipText,
+                            selectedCategory === cat &&
+                              s.categoryChipTextActive,
+                          ]}
+                        >
+                          {cat.split(" ").slice(1).join(" ")}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  {/* Photo upload */}
+                  <Text style={s.imageLabel}>PHOTO EVIDENCE (REQUIRED)</Text>
+                  <TouchableOpacity
+                    style={s.imagePickerBtn}
+                    onPress={handlePickImage}
+                    activeOpacity={0.8}
+                  >
+                    {imageUri ? (
+                      <Image
+                        source={{ uri: imageUri }}
+                        style={s.imagePreview}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <>
+                        <Text style={s.imagePickerEmoji}>📷</Text>
+                        <Text style={s.imagePickerText}>
+                          Tap to attach a photo
+                        </Text>
+                      </>
+                    )}
                   </TouchableOpacity>
-                </View>
-              </>
-            )}
+
+                  {/* Description */}
+                  <Text style={s.descriptionLabel}>DESCRIPTION</Text>
+                  <TextInput
+                    style={s.modalInput}
+                    placeholder="Describe the issue in detail..."
+                    placeholderTextColor="#A0AECB"
+                    value={description}
+                    onChangeText={setDescription}
+                    multiline
+                  />
+
+                  <View style={s.modalButtons}>
+                    <TouchableOpacity
+                      style={[s.modalButton, s.modalCancel]}
+                      onPress={
+                        isEditing
+                          ? () => {
+                              setIsEditing(false);
+                            }
+                          : handleCancel
+                      }
+                    >
+                      <Text style={s.modalButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[s.modalButton, s.modalSave]}
+                      onPress={handleSaveReport}
+                    >
+                      <Text style={s.modalSaveText}>
+                        {isEditing ? "Update" : "Submit Report"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
     </SafeAreaView>
   );
 }
-
-// ---------- Styles ----------
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#071A2B",
-  },
-  screen: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  headerRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-    marginTop: 4,
-  },
-  appTitle: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: "#FFFFFF",
-  },
-  appSubtitle: {
-    fontSize: 14,
-    color: "#B1C3D7",
-    marginTop: 2,
-  },
-  profileButton: {
-    width: AVATAR_SIZE,
-    height: AVATAR_SIZE,
-    borderRadius: AVATAR_SIZE / 2,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.25)",
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  profileImage: {
-    width: "100%",
-    height: "100%",
-  },
-  profilePlaceholder: {
-    width: "100%",
-    height: "100%",
-    borderRadius: AVATAR_SIZE / 2,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.14)",
-  },
-  profileInitial: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#7DE0FF",
-  },
-  profileModalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.25)",
-    justifyContent: "flex-start",
-    alignItems: "flex-end",
-    paddingTop: 56,
-    paddingRight: 16,
-  },
-  profileModalCard: {
-    width: 220,
-    backgroundColor: "#0B2A3F",
-    borderRadius: 16,
-    padding: 16,
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 16,
-    elevation: 6,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-  },
-  profileImageBig: {
-    width: AVATAR_SIZE_BIG,
-    height: AVATAR_SIZE_BIG,
-    borderRadius: AVATAR_SIZE_BIG / 2,
-    marginBottom: 8,
-  },
-  profilePlaceholderBig: {
-    width: AVATAR_SIZE_BIG,
-    height: AVATAR_SIZE_BIG,
-    borderRadius: AVATAR_SIZE_BIG / 2,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.14)",
-    marginBottom: 8,
-  },
-  profileInitialBig: {
-    fontSize: 26,
-    fontWeight: "700",
-    color: "#7DE0FF",
-  },
-  profileName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#FFFFFF",
-  },
-  profileEmail: {
-    fontSize: 12,
-    color: "#A9BED4",
-    marginBottom: 12,
-  },
-  profileLogoutButton: {
-    marginTop: 4,
-    width: "100%",
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: "#fee2e2",
-    alignItems: "center",
-  },
-  profileLogoutText: {
-    color: "#b91c1c",
-    fontWeight: "600",
-    fontSize: 14,
-  },
-  mapCard: {
-    flex: 1,
-    borderRadius: 24,
-    overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-  },
-  map: {
-    flex: 1,
-  },
-  shareBarWrapper: {
-    alignItems: "center",
-    paddingTop: 12,
-  },
-  shareBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#60D2FF",
-    paddingHorizontal: 28,
-    paddingVertical: 12,
-    borderRadius: 999,
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  sharePlus: {
-    color: "#062033",
-    fontSize: 20,
-    marginRight: 8,
-  },
-  shareText: {
-    color: "#062033",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  marker: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.92)",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#071A2B",
-    overflow: "hidden",
-  },
-  markerImage: {
-    width: "100%",
-    height: "100%",
-  },
-  markerInitial: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#062033",
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.4)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalCard: {
-    width: "90%",
-    maxHeight: "85%",
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 16,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    marginBottom: 4,
-    color: "#020617",
-  },
-  timestampText: {
-    fontSize: 12,
-    color: "#9ca3af",
-    marginBottom: 8,
-  },
-  modalInput: {
-    minHeight: 80,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 10,
-    padding: 10,
-    textAlignVertical: "top",
-    backgroundColor: "#f9fafb",
-  },
-  thoughtText: {
-    fontSize: 16,
-    color: "#111827",
-  },
-  ownerActionsRow: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    marginTop: 8,
-    flexWrap: "wrap",
-  },
-  commentsTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  commentsList: {
-    maxHeight: 200,
-  },
-  noCommentsText: {
-    color: "#6b7280",
-    fontStyle: "italic",
-  },
-  commentItem: {
-    marginBottom: 8,
-  },
-  commentHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  commentActionsRow: {
-    flexDirection: "row",
-  },
-  commentAction: {
-    marginLeft: 8,
-  },
-  commentActionText: {
-    fontSize: 12,
-    color: "#1d4ed8",
-  },
-  commentDeleteText: {
-    color: "#b91c1c",
-  },
-  commentAuthor: {
-    fontWeight: "600",
-    color: "#111827",
-  },
-  commentTimestamp: {
-    fontSize: 11,
-    color: "#9ca3af",
-  },
-  commentText: {
-    color: "#374151",
-    marginTop: 2,
-  },
-  commentEditBlock: {
-    marginTop: 4,
-  },
-  commentEditInput: {
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    textAlignVertical: "top",
-  },
-  commentEditButtonsRow: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    marginTop: 4,
-  },
-  commentEditButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    marginLeft: 6,
-  },
-  commentInputRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 12,
-  },
-  commentInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    marginRight: 8,
-    backgroundColor: "#f9fafb",
-  },
-  sendButton: {
-    backgroundColor: "#1d4ed8",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  sendButtonText: {
-    color: "#fff",
-    fontWeight: "500",
-  },
-  modalButtons: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    marginTop: 12,
-    flexWrap: "wrap",
-  },
-  modalButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginLeft: 8,
-    marginTop: 4,
-  },
-  modalCancel: {
-    backgroundColor: "#e5e7eb",
-  },
-  modalSave: {
-    backgroundColor: "#1d4ed8",
-  },
-  modalButtonText: {
-    color: "#111827",
-    fontWeight: "500",
-  },
-  modalDelete: {
-    backgroundColor: "#fee2e2",
-  },
-  modalDeleteText: {
-    color: "#b91c1c",
-    fontWeight: "600",
-  },
-});
