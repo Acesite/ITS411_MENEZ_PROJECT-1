@@ -27,12 +27,6 @@ const REPORT_TYPES = [
   { icon: "🗑️", label: "Illegal\nDump" },
 ];
 
-const STATS = [
-  { num: "247", label: "ACTIVE" },
-  { num: "83", label: "RESOLVED" },
-  { num: "12", label: "NEARBY" },
-];
-
 // ── Screen ───────────────────────────────
 export default function Login() {
   const { setUser } = useUser();
@@ -112,16 +106,6 @@ export default function Login() {
                 </Text>
               </View>
               <Text style={s.tagline}>// REPORT · PIN · TRACK CITY ISSUES</Text>
-            </View>
-
-            {/* ── Stats ── */}
-            <View style={s.statsRow}>
-              {STATS.map((stat) => (
-                <View key={stat.label} style={s.statBox}>
-                  <Text style={s.statNum}>{stat.num}</Text>
-                  <Text style={s.statLbl}>{stat.label}</Text>
-                </View>
-              ))}
             </View>
 
             {/* ── Report types ── */}

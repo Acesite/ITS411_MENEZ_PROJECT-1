@@ -1,13 +1,18 @@
-// components/MapScreen/types.ts
+// mapscreen/types.ts
 
 export type ReportCategory =
-  | "🌉 Broken Bridge"
-  | "🛣️ Damaged Road"
-  | "🏗️ Unfinished Infrastructure"
-  | "🌊 Destroyed Creek"
-  | "🗑️ Garbage Dump"
-  | "💡 Broken Street Light"
-  | "🚧 Road Obstruction";
+  | "Damaged Road"
+  | "Flood & Drainage"
+  | "Broken Drainage / Canal"
+  | "Fire Hazard"
+  | "Broken Street Light"
+  | "Illegal Dumping"
+  | "Illegal Road Obstruction"
+  | "Illegal Structure / Encroachment"
+  | "Overgrown Vegetation"
+  | "Water Supply Issue";
+
+export type ReportPriority = "Low" | "Medium" | "High";
 
 export type ReportStatus = "pending" | "resolved";
 
@@ -16,6 +21,7 @@ export type Report = {
   coord: [number, number]; // [lng, lat]
   description: string;
   category: ReportCategory;
+  priority: ReportPriority;
   status: ReportStatus;
   imageBase64: string | null;
   userId: string | null;

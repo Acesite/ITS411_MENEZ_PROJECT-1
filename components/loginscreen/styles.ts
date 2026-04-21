@@ -1,14 +1,14 @@
 // components/LoginScreen/styles.ts
 import { StyleSheet } from "react-native";
 import {
-    BG,
-    BLUE,
-    BLUE_SOFT,
-    BORDER,
-    INK,
-    MONO,
-    MUTED,
-    WHITE
+  BG,
+  BLUE,
+  BLUE_SOFT,
+  BORDER,
+  INK,
+  MONO,
+  MUTED,
+  WHITE,
 } from "../../constants/theme";
 
 const s = StyleSheet.create({
@@ -36,6 +36,7 @@ const s = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    marginTop: 70,
   },
   liveBadge: {
     flexDirection: "row",
@@ -68,7 +69,7 @@ const s = StyleSheet.create({
   },
 
   // Header
-  header: { gap: 4 },
+  header: { gap: 4, marginTop: 5 },
   logoRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   iconWrap: {
     width: 42,
