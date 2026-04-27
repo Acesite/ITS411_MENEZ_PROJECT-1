@@ -121,7 +121,6 @@ export default function MapboxScreen() {
 
   // Auth / profile
   const [currentUser, setCurrentUser] = useState(auth().currentUser);
-  const [hasRefreshedForUser, setHasRefreshedForUser] = useState(false);
   const [myProfile, setMyProfile] = useState<UserProfile | null>(null);
   const [userProfiles, setUserProfiles] = useState<Record<string, UserProfile>>(
     {},
@@ -132,6 +131,37 @@ export default function MapboxScreen() {
   );
   const myProfileUnsubRef = useRef<(() => void) | null>(null);
   const cleanupMyProfile = useUnsub(myProfileUnsubRef);
+
+  // ── Location (request permission + immediate one-shot fix) ────────────────
+  useEffect(() => {
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission needed",
+          "We need your location to pin reports on the map.",
+        );
+        return;
+      }
+      // Immediately get a position so the user doesn't have to wait
+      // for Mapbox's UserLocation callback to fire on first load.
+      try {
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        const coord: [number, number] = [
+          loc.coords.longitude,
+          loc.coords.latitude,
+        ];
+        setUserLocation(coord);
+        setCameraCenter(coord);
+        setCameraZoom(15);
+      } catch {
+        // GPS unavailable right now — Mapbox UserLocation will still
+        // try and handleUserLocationUpdate will pick it up.
+      }
+    })();
+  }, []);
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -190,15 +220,6 @@ export default function MapboxScreen() {
   }, []);
 
   useEffect(() => {
-    if (currentUser && !hasRefreshedForUser) {
-      setUserLocation(null);
-      setCameraCenter(null);
-      setCameraZoom(12);
-      setHasRefreshedForUser(true);
-    }
-  }, [currentUser?.uid]);
-
-  useEffect(() => {
     return firestore()
       .collection("userProfiles")
       .onSnapshot(
@@ -234,17 +255,6 @@ export default function MapboxScreen() {
       if (typeof commentsUnsubRef.current === "function")
         commentsUnsubRef.current();
     };
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted")
-        Alert.alert(
-          "Permission needed",
-          "We need your location to pin reports on the map.",
-        );
-    })();
   }, []);
 
   // ── Reports ──────────────────────────────────────────────────────────────
@@ -323,6 +333,13 @@ export default function MapboxScreen() {
     setEditingCommentText("");
   };
 
+  // ── Image helpers ─────────────────────────────────────────────────────────
+  const applyImageAsset = (asset: ImagePicker.ImagePickerAsset) => {
+    setImageUri(asset.uri);
+    const mime = asset.mimeType ?? "image/jpeg";
+    setImageBase64(asset.base64 ? `data:${mime};base64,${asset.base64}` : null);
+  };
+
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleLogout = async () => {
     try {
@@ -332,23 +349,31 @@ export default function MapboxScreen() {
     }
   };
 
+  // Removed the "|| userLocation" short-circuit so GPS updates keep arriving
+  // after the first fix (e.g. if accuracy improves).
+  // setCameraCenter uses the functional updater so the camera only auto-flies
+  // to the user on the very first Mapbox fix (when prev is still null).
   const handleUserLocationUpdate = (location: any) => {
     try {
       const { longitude, latitude } = location?.coords ?? {};
-      if (!longitude || userLocation) return;
+      if (!longitude) return;
       const coord: [number, number] = [longitude, latitude];
       setUserLocation(coord);
-      setCameraCenter(coord);
-      setCameraZoom(15);
+      setCameraCenter((prev) => prev ?? coord);
+      setCameraZoom((prev) => (prev === 12 ? 15 : prev));
     } catch {
       /* ignore */
     }
   };
 
-  const handlePickImage = async () => {
+  // Pick from gallery
+  const handlePickFromGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission required", "We need access to your photos.");
+      Alert.alert(
+        "Permission required",
+        "We need access to your photo library to attach a photo.",
+      );
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -359,12 +384,29 @@ export default function MapboxScreen() {
       base64: true,
     });
     if (!result.canceled) {
-      const asset = result.assets[0];
-      setImageUri(asset.uri);
-      const mime = asset.mimeType ?? "image/jpeg";
-      setImageBase64(
-        asset.base64 ? `data:${mime};base64,${asset.base64}` : null,
+      applyImageAsset(result.assets[0]);
+    }
+  };
+
+  // Take photo with camera
+  const handlePickFromCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission required",
+        "We need access to your camera to take a photo.",
       );
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.5,
+      base64: true,
+    });
+    if (!result.canceled) {
+      applyImageAsset(result.assets[0]);
     }
   };
 
@@ -372,7 +414,7 @@ export default function MapboxScreen() {
     if (!userLocation) {
       Alert.alert(
         "Location not ready",
-        "Waiting for GPS fix. Please log out and log in again.",
+        "Still waiting for a GPS fix. Please wait a moment and try again.",
       );
       return;
     }
@@ -792,7 +834,8 @@ export default function MapboxScreen() {
         setDescription={setDescription}
         imageUri={imageUri}
         imageBase64={imageBase64}
-        onPickImage={handlePickImage}
+        onPickFromGallery={handlePickFromGallery}
+        onPickFromCamera={handlePickFromCamera}
         onSave={handleSaveReport}
         onCancel={handleCancel}
         onStopEditing={() => setIsEditing(false)}

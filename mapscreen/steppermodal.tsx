@@ -16,7 +16,7 @@ import {
   CATEGORY_GROUPS,
   GROUP_COLOR,
   PRIORITY_CONFIG,
-  PRIORITY_LEVELS
+  PRIORITY_LEVELS,
 } from "./constants";
 import type { Report, ReportCategory, ReportPriority } from "./types";
 
@@ -278,22 +278,26 @@ function Step1({
 function Step2({
   imageUri,
   imageBase64,
-  onPickImage,
+  onPickFromGallery,
+  onPickFromCamera,
   onBack,
   onNext,
 }: {
   imageUri: string | null;
   imageBase64: string | null;
-  onPickImage: () => void;
+  onPickFromGallery: () => void;
+  onPickFromCamera: () => void;
   onBack: () => void;
   onNext: () => void;
 }) {
   return (
     <View>
       <Text style={sr.sectionLabel}>PHOTO EVIDENCE (REQUIRED)</Text>
+
+      {/* Preview / gallery picker zone */}
       <TouchableOpacity
         style={sr.photoZone}
-        onPress={onPickImage}
+        onPress={onPickFromGallery}
         activeOpacity={0.8}
       >
         {imageUri ? (
@@ -304,19 +308,39 @@ function Step2({
               resizeMode="cover"
             />
             <View style={sr.photoChangeOverlay}>
-              <Text style={sr.photoChangeText}>📷 Change photo</Text>
+              <Text style={sr.photoChangeText}>
+                🖼️ Change photo from gallery
+              </Text>
             </View>
           </>
         ) : (
           <>
-            <Text style={{ fontSize: 36 }}>📷</Text>
-            <Text style={sr.photoZoneLabel}>Tap to attach a photo</Text>
+            <Text style={{ fontSize: 36 }}>🖼️</Text>
+            <Text style={sr.photoZoneLabel}>Tap to choose from gallery</Text>
             <Text style={sr.photoZoneSub}>
               A photo is required to submit a report
             </Text>
           </>
         )}
       </TouchableOpacity>
+
+      {/* Divider */}
+      <View style={sr.orDivider}>
+        <View style={sr.orLine} />
+        <Text style={sr.orText}>OR</Text>
+        <View style={sr.orLine} />
+      </View>
+
+      {/* Camera button */}
+      <TouchableOpacity
+        style={sr.cameraBtn}
+        onPress={onPickFromCamera}
+        activeOpacity={0.8}
+      >
+        <Text style={{ fontSize: 20 }}>📷</Text>
+        <Text style={sr.cameraBtnText}>Take a Photo with Camera</Text>
+      </TouchableOpacity>
+
       <NavButtons
         backLabel="← Back"
         backAction={onBack}
@@ -420,7 +444,8 @@ export interface StepperModalProps {
   setDescription: (d: string) => void;
   imageUri: string | null;
   imageBase64: string | null;
-  onPickImage: () => void;
+  onPickFromGallery: () => void;
+  onPickFromCamera: () => void;
   onSave: () => void;
   onCancel: () => void;
   onStopEditing: () => void;
@@ -437,7 +462,8 @@ export function StepperModal({
   setDescription,
   imageUri,
   imageBase64,
-  onPickImage,
+  onPickFromGallery,
+  onPickFromCamera,
   onSave,
   onCancel,
   onStopEditing,
@@ -483,7 +509,8 @@ export function StepperModal({
               <Step2
                 imageUri={imageUri}
                 imageBase64={imageBase64}
-                onPickImage={onPickImage}
+                onPickFromGallery={onPickFromGallery}
+                onPickFromCamera={onPickFromCamera}
                 onBack={() => setStep(1)}
                 onNext={() => setStep(3)}
               />
@@ -637,7 +664,7 @@ const sr = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
-    marginBottom: 20,
+    marginBottom: 12,
     gap: 8,
   },
   photoPreview: { width: "100%", height: 200 },
@@ -653,6 +680,42 @@ const sr = StyleSheet.create({
   photoChangeText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   photoZoneLabel: { fontSize: 14, color: "#64748B", fontWeight: "500" },
   photoZoneSub: { fontSize: 12, color: "#94A3B8" },
+
+  orDivider: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    gap: 10,
+  },
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#E2E8F0",
+  },
+  orText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#94A3B8",
+    letterSpacing: 1,
+  },
+
+  cameraBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderWidth: 1.5,
+    borderColor: "#1A6BF5",
+    borderRadius: 12,
+    paddingVertical: 13,
+    marginBottom: 20,
+    backgroundColor: "#EFF6FF",
+  },
+  cameraBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1A6BF5",
+  },
 
   textArea: {
     borderWidth: 1,
