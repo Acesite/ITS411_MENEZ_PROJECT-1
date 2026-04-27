@@ -219,23 +219,49 @@ export default function MapboxScreen() {
     };
   }, []);
 
+  // AFTER — no orderBy, sort client-side instead
   useEffect(() => {
-    return firestore()
-      .collection("userProfiles")
-      .onSnapshot(
-        (snap) => {
-          const map: Record<string, UserProfile> = {};
-          snap.forEach((doc) => {
-            const d = doc.data() as any;
-            map[doc.id] = {
-              displayName: d.displayName ?? null,
-              avatarBase64: d.avatarBase64 ?? null,
-            };
-          });
-          setUserProfiles(map);
-        },
-        (err) => console.log("Profiles error:", err),
-      );
+    return (
+      firestore()
+        .collection("reports")
+        // No .orderBy() here — avoids index/null field failures on fresh install
+        .onSnapshot(
+          (snapshot) => {
+            const parsed = snapshot.docs.flatMap((docSnap) => {
+              const d = docSnap.data() as any;
+              if (d?.lng == null || d?.lat == null || !d?.description)
+                return [];
+              const createdAt: Date | null = d.createdAt?.toDate?.() ?? null;
+              return [
+                {
+                  id: docSnap.id,
+                  coord: [d.lng as number, d.lat as number],
+                  description: String(d.description),
+                  category: toCategory(d.category),
+                  priority: toPriority(d.priority),
+                  status: d.status === "resolved" ? "resolved" : "pending",
+                  imageBase64: d.imageBase64 ?? null,
+                  userId: d.userId ?? null,
+                  userName: d.userName ?? "Unknown user",
+                  createdAt,
+                  createdAgo: formatTimeAgo(createdAt),
+                } as Report,
+              ];
+            });
+
+            // Sort client-side — nulls go to the end
+            parsed.sort((a, b) => {
+              if (!a.createdAt && !b.createdAt) return 0;
+              if (!a.createdAt) return 1;
+              if (!b.createdAt) return -1;
+              return b.createdAt.getTime() - a.createdAt.getTime();
+            });
+
+            setReports(parsed);
+          },
+          (err) => console.error("Reports error:", err),
+        )
+    );
   }, []);
 
   useEffect(() => {
