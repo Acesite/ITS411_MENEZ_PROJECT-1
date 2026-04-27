@@ -81,10 +81,9 @@ export default function MapboxScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { refresh } = useLocalSearchParams<{ refresh?: string }>();
-  const [mapKey] = useState(() =>
+  const [mapKey, setMapKey] = useState(() =>
     refresh === "1" ? `map-login-${Date.now()}` : "map-default",
   );
-
   // Map / reports
   const [userLocation, setUserLocation] = useState<[number, number] | null>(
     null,
@@ -119,6 +118,8 @@ export default function MapboxScreen() {
   const commentsUnsubRef = useRef<(() => void) | null>(null);
   const cleanupComments = useUnsub(commentsUnsubRef);
 
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+
   // Auth / profile
   const [currentUser, setCurrentUser] = useState(auth().currentUser);
   const [myProfile, setMyProfile] = useState<UserProfile | null>(null);
@@ -132,7 +133,7 @@ export default function MapboxScreen() {
   const myProfileUnsubRef = useRef<(() => void) | null>(null);
   const cleanupMyProfile = useUnsub(myProfileUnsubRef);
 
-  // ── Location (request permission + immediate one-shot fix) ────────────────
+  // ── Location ─────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -143,8 +144,6 @@ export default function MapboxScreen() {
         );
         return;
       }
-      // Immediately get a position so the user doesn't have to wait
-      // for Mapbox's UserLocation callback to fire on first load.
       try {
         const loc = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
@@ -157,13 +156,12 @@ export default function MapboxScreen() {
         setCameraCenter(coord);
         setCameraZoom(15);
       } catch {
-        // GPS unavailable right now — Mapbox UserLocation will still
-        // try and handleUserLocationUpdate will pick it up.
+        // GPS unavailable — Mapbox UserLocation will still try
       }
     })();
   }, []);
 
-  // ── Auth ─────────────────────────────────────────────────────────────────
+  // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     const unsub = auth().onAuthStateChanged(async (user) => {
       cleanupMyProfile();
@@ -219,49 +217,23 @@ export default function MapboxScreen() {
     };
   }, []);
 
-  // AFTER — no orderBy, sort client-side instead
   useEffect(() => {
-    return (
-      firestore()
-        .collection("reports")
-        // No .orderBy() here — avoids index/null field failures on fresh install
-        .onSnapshot(
-          (snapshot) => {
-            const parsed = snapshot.docs.flatMap((docSnap) => {
-              const d = docSnap.data() as any;
-              if (d?.lng == null || d?.lat == null || !d?.description)
-                return [];
-              const createdAt: Date | null = d.createdAt?.toDate?.() ?? null;
-              return [
-                {
-                  id: docSnap.id,
-                  coord: [d.lng as number, d.lat as number],
-                  description: String(d.description),
-                  category: toCategory(d.category),
-                  priority: toPriority(d.priority),
-                  status: d.status === "resolved" ? "resolved" : "pending",
-                  imageBase64: d.imageBase64 ?? null,
-                  userId: d.userId ?? null,
-                  userName: d.userName ?? "Unknown user",
-                  createdAt,
-                  createdAgo: formatTimeAgo(createdAt),
-                } as Report,
-              ];
-            });
-
-            // Sort client-side — nulls go to the end
-            parsed.sort((a, b) => {
-              if (!a.createdAt && !b.createdAt) return 0;
-              if (!a.createdAt) return 1;
-              if (!b.createdAt) return -1;
-              return b.createdAt.getTime() - a.createdAt.getTime();
-            });
-
-            setReports(parsed);
-          },
-          (err) => console.error("Reports error:", err),
-        )
-    );
+    return firestore()
+      .collection("userProfiles")
+      .onSnapshot(
+        (snap) => {
+          const map: Record<string, UserProfile> = {};
+          snap.forEach((doc) => {
+            const d = doc.data() as any;
+            map[doc.id] = {
+              displayName: d.displayName ?? null,
+              avatarBase64: d.avatarBase64 ?? null,
+            };
+          });
+          setUserProfiles(map);
+        },
+        (err) => console.log("Profiles error:", err),
+      );
   }, []);
 
   useEffect(() => {
@@ -283,15 +255,16 @@ export default function MapboxScreen() {
     };
   }, []);
 
-  // ── Reports ──────────────────────────────────────────────────────────────
+  // ── Reports — no orderBy, no imageBase64 in list ─────────────────────────
   useEffect(() => {
-    return firestore()
-      .collection("reports")
-      .orderBy("createdAt", "desc")
-      .onSnapshot(
-        (snapshot) => {
-          setReports(
-            snapshot.docs.flatMap((docSnap) => {
+    return (
+      firestore()
+        .collection("reports")
+        // No .orderBy() — avoids index/null-field failures on fresh install.
+        // Sorting is done client-side below.
+        .onSnapshot(
+          (snapshot) => {
+            const parsed = snapshot.docs.flatMap((docSnap) => {
               const d = docSnap.data() as any;
               if (d?.lng == null || d?.lat == null || !d?.description)
                 return [];
@@ -304,21 +277,32 @@ export default function MapboxScreen() {
                   category: toCategory(d.category),
                   priority: toPriority(d.priority),
                   status: d.status === "resolved" ? "resolved" : "pending",
-                  imageBase64: d.imageBase64 ?? null,
+                  // imageBase64 intentionally omitted here — fetched lazily on tap
+                  imageBase64: null,
                   userId: d.userId ?? null,
                   userName: d.userName ?? "Unknown user",
                   createdAt,
                   createdAgo: formatTimeAgo(createdAt),
                 } as Report,
               ];
-            }),
-          );
-        },
-        (err) => console.error("Reports error:", err),
-      );
+            });
+
+            // Client-side sort descending; nulls go to end
+            parsed.sort((a, b) => {
+              if (!a.createdAt && !b.createdAt) return 0;
+              if (!a.createdAt) return 1;
+              if (!b.createdAt) return -1;
+              return b.createdAt.getTime() - a.createdAt.getTime();
+            });
+
+            setReports(parsed);
+          },
+          (err) => console.error("Reports error:", err),
+        )
+    );
   }, []);
 
-  // ── Derived ──────────────────────────────────────────────────────────────
+  // ── Derived ───────────────────────────────────────────────────────────────
   const displayName =
     myProfile?.displayName ||
     currentUser?.displayName ||
@@ -342,7 +326,7 @@ export default function MapboxScreen() {
     [filteredReports],
   );
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const resetForm = () => {
     setDescription("");
     setSelectedCategory(REPORT_CATEGORIES[0]);
@@ -366,7 +350,7 @@ export default function MapboxScreen() {
     setImageBase64(asset.base64 ? `data:${mime};base64,${asset.base64}` : null);
   };
 
-  // ── Handlers ─────────────────────────────────────────────────────────────
+  // ── Handlers ──────────────────────────────────────────────────────────────
   const handleLogout = async () => {
     try {
       await auth().signOut();
@@ -375,10 +359,6 @@ export default function MapboxScreen() {
     }
   };
 
-  // Removed the "|| userLocation" short-circuit so GPS updates keep arriving
-  // after the first fix (e.g. if accuracy improves).
-  // setCameraCenter uses the functional updater so the camera only auto-flies
-  // to the user on the very first Mapbox fix (when prev is still null).
   const handleUserLocationUpdate = (location: any) => {
     try {
       const { longitude, latitude } = location?.coords ?? {};
@@ -392,13 +372,12 @@ export default function MapboxScreen() {
     }
   };
 
-  // Pick from gallery
   const handlePickFromGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert(
         "Permission required",
-        "We need access to your photo library to attach a photo.",
+        "We need access to your photo library.",
       );
       return;
     }
@@ -409,19 +388,13 @@ export default function MapboxScreen() {
       quality: 0.5,
       base64: true,
     });
-    if (!result.canceled) {
-      applyImageAsset(result.assets[0]);
-    }
+    if (!result.canceled) applyImageAsset(result.assets[0]);
   };
 
-  // Take photo with camera
   const handlePickFromCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert(
-        "Permission required",
-        "We need access to your camera to take a photo.",
-      );
+      Alert.alert("Permission required", "We need access to your camera.");
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -431,9 +404,7 @@ export default function MapboxScreen() {
       quality: 0.5,
       base64: true,
     });
-    if (!result.canceled) {
-      applyImageAsset(result.assets[0]);
-    }
+    if (!result.canceled) applyImageAsset(result.assets[0]);
   };
 
   const openReportModal = () => {
@@ -453,18 +424,37 @@ export default function MapboxScreen() {
     setIsModalVisible(true);
   };
 
-  const handleSelectReport = (r: Report) => {
+  // ── Select report: open modal immediately, fetch image lazily ─────────────
+  const handleSelectReport = async (r: Report) => {
+    // 1. Show modal right away with lightweight pin data
     setSelectedReport(r);
     setDescription(r.description);
     setSelectedCategory(r.category);
     setPriority(r.priority ?? "Medium");
-    setImageUri(toImageSource(r.imageBase64)?.uri ?? null);
-    setImageBase64(r.imageBase64);
+    setImageUri(null);
+    setImageBase64(null);
     setIsEditing(false);
     setIsModalVisible(true);
     setCameraCenter(r.coord);
     setCameraZoom(18);
     clearComments();
+
+    // 2. Fetch full doc (imageBase64) and comments in parallel
+    try {
+      const docSnap = await firestore().collection("reports").doc(r.id).get();
+      const d = docSnap.data() as any;
+      if (d?.imageBase64) {
+        setSelectedReport((prev) =>
+          prev ? { ...prev, imageBase64: d.imageBase64 } : prev,
+        );
+        setImageUri(d.imageBase64);
+        setImageBase64(d.imageBase64);
+      }
+    } catch (e) {
+      console.error("Failed to fetch report image:", e);
+    }
+
+    // 3. Start comments listener
     commentsUnsubRef.current = firestore()
       .collection("reports")
       .doc(r.id)
@@ -581,18 +571,40 @@ export default function MapboxScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            await firestore()
-              .collection("reports")
-              .doc(selectedReport.id)
-              .delete();
+            const idToDelete = selectedReport.id;
+
+            // 1. Mark as deleting so stale pin tap is ignored
+            setDeletingIds((prev) => new Set(prev).add(idToDelete));
+
+            // 2. Close modal immediately
             setIsModalVisible(false);
             setIsEditing(false);
             setSelectedReport(null);
             resetForm();
             clearComments();
+
+            // 3. Delete from Firestore
+            await firestore().collection("reports").doc(idToDelete).delete();
+
+            // 4. Force Mapbox to remount — clears stale callout bubble
+            setMapKey(`map-reload-${Date.now()}`);
+
+            // 5. Clean up deleting set
+            setDeletingIds((prev) => {
+              const next = new Set(prev);
+              next.delete(idToDelete);
+              return next;
+            });
           } catch (e) {
             console.error(e);
             Alert.alert("Error", "Could not delete your report.");
+
+            // Clean up deleting set on failure too
+            setDeletingIds((prev) => {
+              const next = new Set(prev);
+              next.delete(selectedReport.id);
+              return next;
+            });
           }
         },
       },
@@ -692,7 +704,7 @@ export default function MapboxScreen() {
     clearComments();
   };
 
-  // ── JSX ──────────────────────────────────────────────────────────────────
+  // ── JSX ───────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={s.safe}>
       <View style={s.screen}>
@@ -780,7 +792,11 @@ export default function MapboxScreen() {
                 key={r.id}
                 id={r.id}
                 coordinate={r.renderCoord}
-                onSelected={() => handleSelectReport(r)}
+                onSelected={() => {
+                  // ← replace this whole onSelected
+                  if (deletingIds.has(r.id)) return;
+                  handleSelectReport(r);
+                }}
               >
                 <View style={s.pin}>
                   <Text style={s.pinEmoji}>{getEmoji(r.category)}</Text>
